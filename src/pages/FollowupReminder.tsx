@@ -440,6 +440,7 @@ export default function FollowupReminder() {
       setShowResultModal(false);
       setCompletingId(null);
       setResultText('');
+      setActiveTab('completed');
     }
   };
 
@@ -574,33 +575,51 @@ export default function FollowupReminder() {
             <h2 className="text-sm font-bold text-slate-800">
               {activeTab === 'all' ? '全部随访' : tabs.find((t) => t.key === activeTab)?.label}
             </h2>
-            <span className="text-xs text-slate-400">{filteredList.length} 条记录</span>
+            <span className="text-xs text-slate-400">
+              {(() => {
+                const shown =
+                  activeTab === 'completed'
+                    ? filteredList
+                    : filteredList.filter(
+                        (f) =>
+                          !(
+                            highRiskList.find((h) => h.id === f.id) &&
+                            activeTab !== 'completed' &&
+                            f.riskLevel === 'high'
+                          ),
+                      );
+                const uniq = new Map(shown.map((f) => [f.id, f]));
+                return uniq.size;
+              })()}{' '}
+              条记录
+            </span>
           </div>
           {filteredList.length > 0 ? (
             <div className="space-y-3">
-              {filteredList
-                .filter((f) => !(highRiskList.find((h) => h.id === f.id) && activeTab !== 'completed' && f.riskLevel === 'high'))
-                .map((f) => (
+              {(() => {
+                const source =
+                  activeTab === 'completed'
+                    ? filteredList
+                    : filteredList.filter(
+                        (f) =>
+                          !(
+                            highRiskList.find((h) => h.id === f.id) &&
+                            activeTab !== 'completed' &&
+                            f.riskLevel === 'high'
+                          ),
+                      );
+                const uniqList = Array.from(new Map(source.map((f) => [f.id, f])).values());
+                return uniqList.map((f) => (
                   <FollowupCard
                     key={f.id}
                     item={f}
                     patient={getPatient(f.patientId)}
-                    onComplete={() => handleOpenComplete(f.id)}
+                    onComplete={() => f.status === 'pending' && handleOpenComplete(f.id)}
                     onEdit={() => handleOpenEdit(f)}
                     onRemind={() => {}}
                   />
-                ))}
-              {activeTab === 'completed' &&
-                filteredList.map((f) => (
-                  <FollowupCard
-                    key={f.id}
-                    item={f}
-                    patient={getPatient(f.patientId)}
-                    onComplete={() => {}}
-                    onEdit={() => handleOpenEdit(f)}
-                    onRemind={() => {}}
-                  />
-                ))}
+                ));
+              })()}
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-slate-200 py-20 text-center">

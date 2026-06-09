@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useAppStore } from '@/store';
 import type { Annotation } from '@/types';
 import {
@@ -71,6 +71,11 @@ const annotationTypeMap: Record<Annotation['type'], { label: string; icon: typeo
   text: { label: '文字', icon: Type },
 };
 
+type DrawState =
+  | { mode: 'none' }
+  | { mode: 'rect' | 'circle'; startX: number; startY: number; curX: number; curY: number }
+  | { mode: 'freehand'; points: { x: number; y: number }[] };
+
 export default function ImageAnnotation() {
   const {
     getExamImages,
@@ -80,6 +85,7 @@ export default function ImageAnnotation() {
     setCurrentTool,
     currentAnnotationColor,
     setAnnotationColor,
+    addAnnotation,
     removeAnnotation,
     getImageAnnotations,
   } = useAppStore();
@@ -92,6 +98,17 @@ export default function ImageAnnotation() {
   });
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [hoveredAnnotation, setHoveredAnnotation] = useState<string | null>(null);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imgWrapRef = useRef<HTMLDivElement | null>(null);
+  const imageElRef = useRef<HTMLImageElement | null>(null);
+  const [draw, setDraw] = useState<DrawState>({ mode: 'none' });
+  const drawRef = useRef<DrawState>({ mode: 'none' });
+  useEffect(() => { drawRef.current = draw; }, [draw]);
+
+  const undoStackRef = useRef<Annotation[][]>([]);
+  const redoStackRef = useRef<Annotation[][]>([]);
+  const [, forceRender] = useState(0);
 
   const allImages = getExamImages();
   const selectedImage = allImages.find((img) => img.id === selectedImageId);
@@ -129,6 +146,272 @@ export default function ImageAnnotation() {
     setSelectedLocation(location);
     if (location && filteredImages.length > 0) {
       setSelectedImage(filteredImages[0].id);
+    }
+  };
+
+  const getRelPos = useCallback((e: React.MouseEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+  }, []);
+
+  const drawAnnotationShape = (ctx: CanvasRenderingContext2D, w: number, h: number, a: Annotation, preview = false) => {
+    ctx.save();
+    ctx.strokeStyle = a.color;
+    ctx.fillStyle = `${a.color}22`;
+    ctx.lineWidth = preview ? 2.5 : 2;
+    const g = a.geometry;
+    switch (a.type) {
+      case 'rect': {
+        const rx = (g.x ?? 0) * w;
+        const ry = (g.y ?? 0) * h;
+        const rw = (g.width ?? 0) * w;
+        const rh = (g.height ?? 0) * h;
+        ctx.beginPath();
+        ctx.rect(rx, ry, rw, rh);
+        ctx.fill();
+        ctx.stroke();
+        break;
+      }
+      case 'circle': {
+        const cx = (g.x ?? 0) * w;
+        const cy = (g.y ?? 0) * h;
+        const rx = (g.width ?? 0) * w * 0.5;
+        const ry = (g.height ?? 0) * h * 0.5;
+        ctx.beginPath();
+        ctx.ellipse(cx + rx, cy + ry, Math.abs(rx), Math.abs(ry), 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        break;
+      }
+      case 'freehand': {
+        const pts = g.points || [];
+        if (pts.length === 0) break;
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+          const px = p.x * w;
+          const py = p.y * h;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+        break;
+      }
+      case 'text': {
+        const tx = (g.x ?? 0) * w;
+        const ty = (g.y ?? 0) * h;
+        const fontSize = Math.max(14, Math.floor(Math.min(w, h) * 0.045));
+        ctx.font = `bold ${fontSize}px "Noto Sans SC", system-ui, sans-serif`;
+        const text = g.text || '文本';
+        const textW = ctx.measureText(text).width;
+        const padding = 6;
+        ctx.fillStyle = a.color;
+        ctx.fillRect(tx, ty - fontSize - padding, textW + padding * 2, fontSize + padding * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(text, tx + padding, ty - padding * 0.5);
+        break;
+      }
+      default: break;
+    }
+    ctx.restore();
+  };
+
+  const redrawAll = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const wrap = imgWrapRef.current;
+    if (!wrap) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = wrap.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const s = drawRef.current;
+    if (s.mode !== 'none' && (s as any).startX !== undefined) {
+      const gs = s as any;
+      const preview: Annotation = {
+        id: 'preview',
+        imageId: '',
+        type: s.mode as any,
+        color: currentAnnotationColor,
+        note: '',
+        geometry:
+          s.mode === 'rect' || s.mode === 'circle'
+            ? {
+                x: Math.min(gs.startX, gs.curX),
+                y: Math.min(gs.startY, gs.curY),
+                width: Math.abs(gs.curX - gs.startX),
+                height: Math.abs(gs.curY - gs.startY),
+              }
+            : s.mode === 'freehand'
+            ? { x: 0, y: 0, points: (s as any).points }
+            : { x: 0, y: 0 },
+      };
+      drawAnnotationShape(ctx, w, h, preview, true);
+    }
+    currentAnnotations.forEach((a) => drawAnnotationShape(ctx, w, h, a));
+  }, [currentAnnotations, currentAnnotationColor]);
+
+  useEffect(() => {
+    const timer = requestAnimationFrame(redrawAll);
+    return () => cancelAnimationFrame(timer);
+  }, [redrawAll, selectedImageId, draw]);
+
+  useEffect(() => {
+    const onResize = () => redrawAll();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [redrawAll]);
+
+  const pushUndo = () => {
+    if (!selectedImageId) return;
+    undoStackRef.current.push([...getImageAnnotations(selectedImageId)]);
+    redoStackRef.current = [];
+    forceRender((n) => n + 1);
+  };
+
+  const handleUndo = () => {
+    if (!selectedImageId) return;
+    const prev = undoStackRef.current.pop();
+    if (!prev) return;
+    redoStackRef.current.push([...getImageAnnotations(selectedImageId)]);
+    const current = getImageAnnotations(selectedImageId);
+    const toRemove = current.filter((a) => !prev.find((p) => p.id === a.id));
+    toRemove.forEach((a) => removeAnnotation(selectedImageId, a.id));
+    const toAdd = prev.filter((a) => !current.find((c) => c.id === a.id));
+    toAdd.forEach((a) => addAnnotation(selectedImageId, a));
+    forceRender((n) => n + 1);
+  };
+
+  const handleRedo = () => {
+    if (!selectedImageId) return;
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+    undoStackRef.current.push([...getImageAnnotations(selectedImageId)]);
+    const current = getImageAnnotations(selectedImageId);
+    const toRemove = current.filter((a) => !next.find((p) => p.id === a.id));
+    toRemove.forEach((a) => removeAnnotation(selectedImageId, a.id));
+    const toAdd = next.filter((a) => !current.find((c) => c.id === a.id));
+    toAdd.forEach((a) => addAnnotation(selectedImageId, a));
+    forceRender((n) => n + 1);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!selectedImage) return;
+    if (currentTool === 'text') return;
+    if (currentTool === 'select' || currentTool === 'eraser') return;
+    const { x, y } = getRelPos(e);
+    pushUndo();
+    if (currentTool === 'rect' || currentTool === 'circle') {
+      const s = { mode: currentTool as 'rect' | 'circle', startX: x, startY: y, curX: x, curY: y };
+      setDraw(s);
+    } else if (currentTool === 'freehand') {
+      setDraw({ mode: 'freehand', points: [{ x, y }] });
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    const d = drawRef.current;
+    if (d.mode === 'none') return;
+    const { x, y } = getRelPos(e);
+    if (d.mode === 'rect' || d.mode === 'circle') {
+      setDraw({ ...d, curX: x, curY: y });
+    } else if (d.mode === 'freehand') {
+      setDraw({ mode: 'freehand', points: [...d.points, { x, y }] });
+    }
+  };
+
+  const finishDrawing = () => {
+    const d = drawRef.current;
+    if (!selectedImage || d.mode === 'none') { setDraw({ mode: 'none' }); return; }
+    let geometry: Annotation['geometry'] | null = null;
+    let type: Annotation['type'] | null = null;
+    if (d.mode === 'rect' || d.mode === 'circle') {
+      const w = Math.abs(d.curX - d.startX);
+      const h = Math.abs(d.curY - d.startY);
+      if (w < 0.005 && h < 0.005) { setDraw({ mode: 'none' }); return; }
+      geometry = {
+        x: Math.min(d.startX, d.curX),
+        y: Math.min(d.startY, d.curY),
+        width: w,
+        height: h,
+      };
+      type = d.mode;
+    } else if (d.mode === 'freehand') {
+      if (d.points.length < 3) { setDraw({ mode: 'none' }); return; }
+      geometry = { x: 0, y: 0, points: d.points };
+      type = 'freehand';
+    }
+    if (geometry && type) {
+      const annotation: Annotation = {
+        id: `A${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        imageId: selectedImage.id,
+        type,
+        geometry,
+        color: currentAnnotationColor,
+        note: '',
+      };
+      addAnnotation(selectedImage.id, annotation);
+    }
+    setDraw({ mode: 'none' });
+  };
+
+  const handleCanvasClick = (e: React.MouseEvent) => {
+    if (!selectedImage) return;
+    if (currentTool !== 'text') return;
+    const { x, y } = getRelPos(e);
+    const text = prompt('请输入标注文字内容（最多 30 字）：', '');
+    if (text && text.trim()) {
+      pushUndo();
+      addAnnotation(selectedImage.id, {
+        id: `A${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        imageId: selectedImage.id,
+        type: 'text',
+        geometry: { x, y, text: text.trim().slice(0, 30) },
+        color: currentAnnotationColor,
+        note: '',
+      });
+    }
+  };
+
+  const handleEraserClick = (e: React.MouseEvent) => {
+    if (!selectedImage || currentTool !== 'eraser') return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width;
+    const my = (e.clientY - rect.top) / rect.height;
+    const hit = [...currentAnnotations].reverse().find((a) => {
+      const g = a.geometry;
+      if (a.type === 'rect' || a.type === 'circle') {
+        const x = g.x ?? 0;
+        const y = g.y ?? 0;
+        const w = g.width ?? 0;
+        const h = g.height ?? 0;
+        return mx >= x - 0.02 && mx <= x + w + 0.02 && my >= y - 0.02 && my <= y + h + 0.02;
+      }
+      if (a.type === 'text') {
+        const x = g.x ?? 0;
+        const y = g.y ?? 0;
+        return Math.abs(mx - x) < 0.15 && Math.abs(my - y) < 0.1;
+      }
+      if (a.type === 'freehand') {
+        return (g.points || []).some((p) => Math.abs(p.x - mx) < 0.03 && Math.abs(p.y - my) < 0.03);
+      }
+      return false;
+    });
+    if (hit) {
+      pushUndo();
+      removeAnnotation(selectedImage.id, hit.id);
     }
   };
 
@@ -271,12 +554,14 @@ export default function ImageAnnotation() {
 
             <button
               title="撤销"
+              onClick={handleUndo}
               className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
             >
               <Undo2 className="w-4 h-4" />
             </button>
             <button
               title="重做"
+              onClick={handleRedo}
               className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
             >
               <Redo2 className="w-4 h-4" />
@@ -300,20 +585,49 @@ export default function ImageAnnotation() {
         <div className="flex-1 p-4 min-h-0">
           <div className="h-full w-full bg-white rounded-xl border-2 border-slate-200 border-dashed flex items-center justify-center overflow-hidden relative">
             {selectedImage ? (
-              <div className="relative w-full h-full flex items-center justify-center p-8">
-                <img
-                  src={selectedImage.url}
-                  alt={selectedImage.description}
-                  className="max-w-full max-h-full object-contain rounded-lg shadow-xl shadow-slate-200"
-                />
-                <div className="absolute top-4 left-4 flex items-center gap-2 bg-white/90 backdrop-blur-sm rounded-lg px-3 py-1.5 border border-slate-200 shadow-sm">
-                  <MapPin className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="text-xs font-medium text-slate-700">{selectedImage.location}</span>
+              <div className="relative w-full h-full flex flex-col">
+                <div className="flex items-center justify-between px-4 pt-3 gap-3 shrink-0">
+                  <div className="flex items-center gap-2 bg-white/90 backdrop-blur-sm rounded-lg px-3 py-1.5 border border-slate-200 shadow-sm">
+                    <MapPin className="w-3.5 h-3.5 text-blue-500" />
+                    <span className="text-xs font-medium text-slate-700">{selectedImage.location}</span>
+                  </div>
+                  <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-1.5 border border-slate-200 shadow-sm">
+                    <span className="text-xs text-slate-500">{selectedImage.capturedAt}</span>
+                  </div>
                 </div>
-                <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-sm rounded-lg px-3 py-1.5 border border-slate-200 shadow-sm">
-                  <span className="text-xs text-slate-500">{selectedImage.capturedAt}</span>
+                <div
+                  ref={imgWrapRef}
+                  className={`relative flex-1 m-4 mb-0 rounded-lg shadow-xl shadow-slate-200 overflow-hidden flex items-center justify-center bg-slate-50 ${
+                    currentTool === 'rect' || currentTool === 'circle' || currentTool === 'freehand'
+                      ? 'cursor-crosshair'
+                      : currentTool === 'text'
+                      ? 'cursor-text'
+                      : currentTool === 'eraser'
+                      ? 'cursor-pointer'
+                      : 'cursor-default'
+                  }`}
+                  onMouseDown={(e) => { handleMouseDown(e); handleEraserClick(e); }}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={finishDrawing}
+                  onMouseLeave={() => {
+                    if (drawRef.current.mode !== 'none') finishDrawing();
+                  }}
+                  onClick={handleCanvasClick}
+                >
+                  <img
+                    ref={imageElRef}
+                    src={selectedImage.url}
+                    alt={selectedImage.description}
+                    onLoad={() => redrawAll()}
+                    draggable={false}
+                    className="w-full h-full object-contain select-none pointer-events-none"
+                  />
+                  <canvas
+                    ref={canvasRef}
+                    className="absolute inset-0 w-full h-full select-none"
+                  />
                 </div>
-                <div className="absolute bottom-4 left-4 right-4 bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2.5 border border-slate-200 shadow-sm">
+                <div className="mx-4 my-4 bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2.5 border border-slate-200 shadow-sm shrink-0">
                   <div className="flex items-start gap-2">
                     <StickyNote className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
@@ -321,7 +635,7 @@ export default function ImageAnnotation() {
                         {selectedImage.description}
                       </div>
                       <div className="text-[11px] text-slate-400 mt-0.5">
-                        标注 {selectedImage.annotations.length} 条 · {selectedImage.id}
+                        标注 {currentAnnotations.length} 条 · {selectedImage.id}
                       </div>
                     </div>
                   </div>

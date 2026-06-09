@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAppStore } from '@/store';
+import type { Patient, Examination } from '@/types';
 import {
   User,
   FileUp,
@@ -22,6 +23,9 @@ import {
   Search,
   Scale,
   ShieldAlert,
+  X,
+  CheckCircle2,
+  Info,
 } from 'lucide-react';
 
 const statusMap = {
@@ -37,6 +41,112 @@ const examTypeMap = {
   胃肠镜: { color: 'bg-violet-50 text-violet-600 border-violet-200', dot: 'bg-violet-500' },
 };
 
+function parseCSV(csv: string): { patients: Patient[]; examinations: Examination[] } {
+  const lines = csv.replace(/\r/g, '').split('\n').filter((l) => l.trim());
+  if (lines.length < 2) throw new Error('CSV 内容为空或只有表头');
+  const headers = lines[0].split(',').map((h) => h.trim());
+  const requiredFields = ['id', 'name', 'gender', 'age'];
+  for (const f of requiredFields) {
+    if (!headers.includes(f)) throw new Error(`缺少必填列: ${f}`);
+  }
+  const patients: Patient[] = [];
+  const examinations: Examination[] = [];
+  const idSet = new Set<string>();
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((v) => v.replace(/^"|"$/g, '').trim());
+    const row: Record<string, string> = {};
+    headers.forEach((h, idx) => (row[h] = values[idx] || ''));
+    if (!row.id || !row.name) continue;
+    if (idSet.has(row.id)) continue;
+    idSet.add(row.id);
+    const gender = (row.gender === '女' ? '女' : '男') as Patient['gender'];
+    const patient: Patient = {
+      id: row.id,
+      name: row.name,
+      gender,
+      age: parseInt(row.age) || 0,
+      idCard: row.idCard || '',
+      phone: row.phone || '',
+      chiefComplaint: row.chiefComplaint || '',
+      allergyHistory: row.allergyHistory ? row.allergyHistory.split(/[、;；]/).filter(Boolean) : [],
+      pastHistory: [],
+      labResults: [],
+      bmi: row.bmi ? parseFloat(row.bmi) : undefined,
+      appointmentDate: row.appointmentDate || row.examDate,
+    };
+    patients.push(patient);
+    const examId = row.examId || `E${row.id}`;
+    const exam: Examination = {
+      id: examId,
+      patientId: patient.id,
+      type: ((row.examType || '胃镜') as Examination['type']) || '胃镜',
+      examDate: row.examDate || '2026-06-09',
+      examTime: row.examTime || '09:00',
+      room: row.room || '内镜1室',
+      anesthesiaType: row.anesthesiaType || '静脉麻醉',
+      preoperativeDiagnosis: row.preoperativeDiagnosis || row.chiefComplaint || '',
+      bostonScore: parseInt(row.bostonScore) || 0,
+      asaGrade: row.asaGrade || '',
+      endoscopeModel: row.endoscopeModel || '',
+      insertionTime: row.insertionTime || '',
+      deepestReached: row.deepestReached || '',
+      withdrawalTime: row.withdrawalTime || '',
+      operatorName: row.operatorName || '',
+      assistantName: row.assistantName || '',
+      consumables: [],
+      contraindications: [],
+      status: 'pending',
+    };
+    examinations.push(exam);
+  }
+  return { patients, examinations };
+}
+
+function parseJSON(text: string): { patients: Patient[]; examinations: Examination[] } {
+  const data = JSON.parse(text);
+  if (Array.isArray(data)) {
+    return { patients: data as Patient[], examinations: [] };
+  }
+  if (data && (Array.isArray(data.patients) || Array.isArray(data.items))) {
+    const arr = (data.patients || data.items || []) as Patient[];
+    const exams = (data.examinations || []) as Examination[];
+    return { patients: arr, examinations: exams };
+  }
+  throw new Error('JSON 结构不支持，需是数组或包含 patients 字段的对象');
+}
+
+function ImportToast() {
+  const { importNotification, setImportNotification } = useAppStore();
+  useEffect(() => {
+    if (!importNotification) return;
+    const t = setTimeout(() => setImportNotification(null), 4500);
+    return () => clearTimeout(t);
+  }, [importNotification, setImportNotification]);
+  if (!importNotification) return null;
+  const cfg = {
+    success: { bg: 'bg-emerald-50 border-emerald-200', icon: CheckCircle2, iconColor: 'text-emerald-500', textColor: 'text-emerald-800' },
+    error: { bg: 'bg-rose-50 border-rose-200', icon: AlertTriangle, iconColor: 'text-rose-500', textColor: 'text-rose-800' },
+    info: { bg: 'bg-blue-50 border-blue-200', icon: Info, iconColor: 'text-blue-500', textColor: 'text-blue-800' },
+  }[importNotification.type];
+  const Icon = cfg.icon;
+  return (
+    <div className="fixed top-20 right-6 z-50 animate-in slide-in-from-right duration-300">
+      <div className={`flex items-start gap-3 min-w-[320px] max-w-md px-4 py-3 rounded-xl border shadow-lg ${cfg.bg}`}>
+        <Icon className={`w-5 h-5 mt-0.5 shrink-0 ${cfg.iconColor}`} />
+        <div className={`flex-1 text-sm font-medium leading-relaxed ${cfg.textColor}`}>
+          {importNotification.message}
+        </div>
+        <button
+          onClick={() => setImportNotification(null)}
+          className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/60 transition-colors ${cfg.iconColor}`}
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function PatientOverview() {
   const {
     patients,
@@ -45,6 +155,8 @@ export default function PatientOverview() {
     getCurrentPatient,
     examinations,
     importAppointments,
+    importNotification,
+    setImportNotification,
   } = useAppStore();
 
   const [patientDropdownOpen, setPatientDropdownOpen] = useState(false);
@@ -52,7 +164,8 @@ export default function PatientOverview() {
 
   const patient = getCurrentPatient();
   const currentExam = examinations.find((e) => e.patientId === currentPatientId);
-  const todayExams = examinations.filter((e) => e.examDate === '2026-06-09');
+  const today = '2026-06-09';
+  const todayExams = examinations.filter((e) => e.examDate === today);
 
   const filteredPatients = patients.filter((p) =>
     p.name.includes(searchKeyword) || p.id.includes(searchKeyword),
@@ -64,17 +177,52 @@ export default function PatientOverview() {
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
     fileInput.accept = '.json,.csv';
-    fileInput.onchange = (e) => {
+    fileInput.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        importAppointments([]);
+      if (!file) return;
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      try {
+        const text = await file.text();
+        if (!text.trim()) throw new Error('文件内容为空');
+        let parsed;
+        if (ext === 'csv') {
+          parsed = parseCSV(text);
+        } else if (ext === 'json') {
+          parsed = parseJSON(text);
+        } else {
+          try { parsed = parseJSON(text); } catch { parsed = parseCSV(text); }
+        }
+        if (!parsed.patients || parsed.patients.length === 0) {
+          throw new Error('未解析到任何有效患者记录');
+        }
+        const { added } = importAppointments(parsed);
+        const total = parsed.patients.length;
+        const examCount = parsed.examinations.length;
+        if (added === 0 && total > 0) {
+          setImportNotification({
+            type: 'info',
+            message: `共 ${total} 条患者记录已存在，已自动跳过。请检查患者 ID 是否重复。`,
+          });
+        } else {
+          setImportNotification({
+            type: 'success',
+            message: `导入成功！已新增 ${added} 位患者${examCount ? `、${examCount} 条检查安排` : ''}，${total - added > 0 ? `${total - added} 条重复已跳过。` : '患者下拉和今日日程已更新。'}`,
+          });
+        }
+      } catch (err: any) {
+        console.error('[Import error]', err);
+        setImportNotification({
+          type: 'error',
+          message: `导入失败（${ext?.toUpperCase() || '文件'}）：${err?.message || '未知错误'}\n请检查：JSON 格式是否合法，或 CSV 是否包含 id/name/gender/age 列。`,
+        });
       }
     };
     fileInput.click();
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 relative">
+      <ImportToast />
       <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center justify-between gap-4">
           <div className="relative">
