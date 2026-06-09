@@ -127,7 +127,7 @@ export interface Report {
   versions?: ReportVersion[];
 }
 
-export type ReportVersionType = 'before_sign' | 'after_sign' | 'auto_save' | 'manual';
+export type ReportVersionType = 'before_sign' | 'after_sign' | 'auto_save' | 'manual' | 'restore_before' | 'restore_to';
 
 export interface ReportVersion {
   id: string;

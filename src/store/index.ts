@@ -109,7 +109,7 @@ interface AppState {
   signReport: (doctorName: string) => void;
   snapshotReport: (examId: string, versionType: ReportVersionType, note?: string, operatorName?: string) => void;
   getReportVersions: (examId: string) => ReportVersion[];
-  restoreReportVersion: (examId: string, versionId: string) => void;
+  restoreReportVersion: (examId: string, versionId: string, operatorName?: string) => void;
 
   createFollowup: (followup: Omit<Followup, 'id' | 'createdAt'>) => void;
   updateFollowup: (id: string, updates: Partial<Followup>) => void;
@@ -438,11 +438,16 @@ export const useAppStore = create<AppState>((set, get) => {
       return r?.versions || [];
     },
 
-    restoreReportVersion: (examId, versionId) => {
+    restoreReportVersion: (examId, versionId, operatorName) => {
       const r = get().getReportByExamId(examId);
       if (!r) return;
       const version = (r.versions || []).find((v) => v.id === versionId);
       if (!version) return;
+      const versionTypeLabel = version.versionType === 'before_sign' ? '签发前' :
+        version.versionType === 'after_sign' ? '已签发' :
+        version.versionType === 'manual' ? '手动快照' :
+        version.versionType === 'auto_save' ? '自动保存' : '历史版本';
+      get().snapshotReport(examId, 'restore_before', `恢复前状态（目标：${versionTypeLabel}）`, operatorName);
       set((s) => ({
         reports: s.reports.map((rep) => {
           if (rep.examId !== examId) return rep;
@@ -461,6 +466,7 @@ export const useAppStore = create<AppState>((set, get) => {
           };
         }),
       }));
+      get().snapshotReport(examId, 'restore_to', `恢复至「${versionTypeLabel}」（${version.id}）`, operatorName);
       persistState(get());
     },
 

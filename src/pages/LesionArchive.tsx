@@ -83,13 +83,22 @@ export default function LesionArchive() {
 
   const lesionImageMap = useMemo(() => {
     const m: Record<string, ImageItem> = {};
+    const allImagesById = new Map(allImages.map((img) => [img.id, img]));
+    allLesions.forEach((l) => {
+      if (l.imageIds && l.imageIds.length > 0) {
+        const found = l.imageIds
+          .map((id) => allImagesById.get(id))
+          .filter(Boolean) as ImageItem[];
+        if (found.length > 0) m[l.id] = found[0];
+      }
+    });
     allImages.forEach((img) => {
       (img.annotations || []).forEach((a) => {
         if (a.lesionId && !m[a.lesionId]) m[a.lesionId] = img;
       });
     });
     return m;
-  }, [allImages]);
+  }, [allImages, allLesions]);
 
   const totalLesions = useMemo(
     () => patientExams.reduce((acc, e) => acc + (examLesionMap[e.id]?.length || 0), 0),
@@ -100,6 +109,34 @@ export default function LesionArchive() {
     () => patientExams.reduce((acc, e) => acc + (examImageMap[e.id]?.length || 0), 0),
     [patientExams, examImageMap]
   );
+
+  interface LocationHistoryItem {
+    lesion: Lesion;
+    exam: Examination;
+    comp: ReturnType<typeof buildChangeComparison>;
+    linkedImage?: ImageItem;
+    annCount: number;
+  }
+  const locationGroups = useMemo<Record<string, LocationHistoryItem[]>>(() => {
+    const groups: Record<string, LocationHistoryItem[]> = {};
+    const examIdxMap = new Map(patientExams.map((e, i) => [e.id, i]));
+    patientExams.forEach((exam) => {
+      const lesions = examLesionMap[exam.id] || [];
+      const examIdx = examIdxMap.get(exam.id) ?? 0;
+      lesions.forEach((lesion) => {
+        if (!groups[lesion.location]) groups[lesion.location] = [];
+        groups[lesion.location].push({
+          lesion,
+          exam,
+          comp: buildChangeComparison(examIdx, lesion),
+          linkedImage: lesionImageMap[lesion.id],
+          annCount: annotationMap[lesion.id] || 0,
+        });
+      });
+    });
+    Object.values(groups).forEach((arr) => arr.sort((a, b) => a.exam.examDate.localeCompare(b.exam.examDate)));
+    return groups;
+  }, [patientExams, examLesionMap, lesionImageMap, annotationMap]);
 
   const buildChangeComparison = (examIdx: number, lesion: Lesion): { trend: 'up' | 'down' | 'same' | 'new'; diffMm?: number; prevSize?: string } => {
     for (let j = examIdx + 1; j < patientExams.length; j++) {
@@ -265,6 +302,144 @@ export default function LesionArchive() {
                 </div>
               </div>
             </div>
+
+            {Object.keys(locationGroups).length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                <div className="flex items-center gap-2.5 mb-5">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary-500 to-violet-500 flex items-center justify-center">
+                    <MapPin className="w-4.5 h-4.5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-800">按位置追踪 · 同位置历次对比</h3>
+                    <p className="text-[11px] text-slate-500">
+                      共 {Object.keys(locationGroups).length} 个部位，复查时快速对比大小、诊断、活检变化</p>
+                  </div>
+                </div>
+
+                <div className="space-y-5">
+                  {Object.entries(locationGroups).map(([location, items]) => {
+                    const firstItem = items[0];
+                    const lastItem = items[items.length - 1];
+                    const sizeTrend = lastItem.comp;
+                    return (
+                      <div key={location} className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50/50 to-white overflow-hidden">
+                        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between gap-3 bg-white/60">
+                          <div className="flex items-center gap-3">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-50 text-violet-700 border border-violet-100 text-xs font-semibold">
+                              <MapPin className="w-3.5 h-3.5" />
+                              {location}
+                            </span>
+                            <span className="text-[11px] text-slate-500">历次 {items.length} 次记录 · 首次 {firstItem.exam.examDate}</span>
+                          </div>
+                          {sizeTrend.trend !== 'new' ? (
+                            <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold ${
+                              sizeTrend.trend === 'up' ? 'bg-rose-50 text-rose-600' :
+                              sizeTrend.trend === 'down' ? 'bg-emerald-50 text-emerald-700' :
+                              'bg-sky-50 text-sky-700'
+                            }`}>
+                              {sizeTrend.trend === 'up' && <ArrowUpRight className="w-3 h-3" />}
+                              {sizeTrend.trend === 'down' && <ArrowDownRight className="w-3 h-3" />}
+                              {sizeTrend.trend === 'same' && <Minus className="w-3 h-3" />}
+                              {sizeTrend.trend === 'up' ? '增大' :
+                              sizeTrend.trend === 'down' ? '缩小' : '稳定'}
+                              {sizeTrend.diffMm !== undefined && Math.abs(sizeTrend.diffMm) >= 0.1
+                                ? ` ${sizeTrend.diffMm > 0 ? '+' : ''}${sizeTrend.diffMm}mm`
+                                : ''}
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[11px] font-semibold">
+                              <Sparkles className="w-3 h-3" /> 新发病灶
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="px-5 py-4">
+                          <div className="relative">
+                            <div className="absolute left-6 right-6 top-1/2 h-0.5 bg-gradient-to-r from-blue-200 via-violet-200 to-fuchsia-200 -translate-y-1/2" />
+                            <div className="flex items-stretch gap-4 overflow-x-auto pb-2">
+                              {items.map((item, iidx) => (
+                                <div key={item.lesion.id} className="relative shrink-0 w-[240px]">
+                                  <div className="absolute left-1/2 -translate-x-1/2 -top-1 z-10 w-3 h-3 rounded-full border-2 border-white shadow-sm"
+                                    style={{ background: iidx === items.length - 1 ? '#8B5CF6' : '#3B82F6' }} />
+                                  <div className="mt-6 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-violet-200 hover:shadow-md transition-all overflow-hidden">
+                                    <div className="px-3.5 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                                      <div className="text-[11px] text-slate-600 font-semibold">{item.exam.type}</div>
+                                      <div className="text-[10px] text-slate-400 font-mono">{item.exam.examDate.replace(/-/g, '/')}</div>
+                                    </div>
+                                    {item.linkedImage && (
+                                      <div className="h-28 bg-slate-100 border-b border-slate-100 relative overflow-hidden">
+                                        <img src={item.linkedImage.url} alt="" className="w-full h-full object-cover" />
+                                        {item.annCount > 0 && (
+                                          <div className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-violet-500/90 text-white text-[9px] font-semibold">
+                                            <Link2 className="w-2.5 h-2.5" /> {item.annCount}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                    <div className="p-3 space-y-1.5">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-100 text-[10px] font-semibold">
+                                          <Ruler className="w-2.5 h-2.5" />
+                                          {item.lesion.sizeMajor ? `${item.lesion.sizeMajor}×${item.lesion.sizeMinor}mm` : '未测量'}
+                                        </span>
+                                        {item.lesion.morphology && (
+                                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-100 text-[10px] font-semibold">
+                                            <Shapes className="w-2.5 h-2.5" />
+                                            {item.lesion.morphology}
+                                          </span>
+                                        )}
+                                        {iidx > 0 && item.comp.trend !== 'new' && item.comp.prevSize && (
+                                          <span
+                                            className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold ${
+                                              item.comp.trend === 'up'
+                                                ? 'bg-rose-50 text-rose-600'
+                                                : item.comp.trend === 'down'
+                                                  ? 'bg-emerald-50 text-emerald-600'
+                                                  : 'bg-slate-50 text-slate-600'
+                                            }`}
+                                          >
+                                            {item.comp.trend === 'up' ? (
+                                              <ArrowUpRight className="w-2 h-2" />
+                                            ) : item.comp.trend === 'down' ? (
+                                              <ArrowDownRight className="w-2 h-2" />
+                                            ) : (
+                                              <Minus className="w-2 h-2" />
+                                            )}
+                                            {item.comp.prevSize}
+                                            {' →'}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {item.lesion.preliminaryDiagnosis && item.lesion.preliminaryDiagnosis.length > 0 && (
+                                        <div className="text-[10px] text-violet-700 font-medium">
+                                          <span className="text-violet-400">诊：</span>{item.lesion.preliminaryDiagnosis.join('、')}
+                                        </div>
+                                      )}
+                                      {item.lesion.biopsy && (
+                                        <div className="text-[10px] text-sky-700">
+                                          <span className="text-sky-400">检：</span>
+                                          {item.lesion.biopsy.site} · {item.lesion.biopsy.forcepsCount}钳
+                                          {item.lesion.biopsy.specimenNos?.length ? ` · 标本${item.lesion.biopsy.specimenNos.join('/')}` : ''}
+                                        </div>
+                                      )}
+                                      {item.lesion.notes && (
+                                        <div className="text-[10px] text-emerald-700">
+                                          <span className="text-emerald-400">备：</span>{item.lesion.notes}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {patientExams.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-16 text-center">

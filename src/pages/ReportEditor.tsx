@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
   Sparkles,
@@ -95,6 +95,8 @@ function CircularProgress({ value, size = 44, strokeWidth = 5 }: CircularProgres
 }
 
 export default function ReportEditor() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const reports = useAppStore((s) => s.reports);
   const allExaminations = useAppStore((s) => s.examinations);
   const generateFindings = useAppStore((s) => s.generateFindings);
@@ -130,6 +132,14 @@ export default function ReportEditor() {
     }
   }, [paramExamId]);
 
+  useEffect(() => {
+    const v = searchParams.get('version');
+    if (v === 'latest' || v === '1') {
+      setShowVersionsPanel(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   const patient = getCurrentPatient();
   const exam = getCurrentExam();
   const report = getCurrentReport() || {
@@ -162,16 +172,20 @@ export default function ReportEditor() {
     after_sign: { label: '已签发', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: PenLine },
     auto_save: { label: '自动保存', color: 'bg-sky-50 text-sky-700 border-sky-200', icon: History },
     manual: { label: '手动快照', color: 'bg-violet-50 text-violet-700 border-violet-200', icon: Camera },
+    restore_before: { label: '恢复前', color: 'bg-rose-50 text-rose-700 border-rose-200', icon: RotateCcw },
+    restore_to: { label: '恢复至', color: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200', icon: RotateCcw },
   };
 
   const handleSnapshot = () => {
     const note = prompt('请输入版本备注（可选）：', '');
-    snapshotReport(selectedExamId, 'manual', note || undefined);
+    const op = prompt('请输入操作人姓名（可选）：', '') || undefined;
+    snapshotReport(selectedExamId, 'manual', note || undefined, op);
   };
 
   const handleRestore = (verId: string) => {
     if (!confirm('确定要恢复到此版本吗？当前编辑内容会被覆盖。')) return;
-    restoreReportVersion(selectedExamId, verId);
+    const op = prompt('请输入操作人姓名（可选）：', '') || undefined;
+    restoreReportVersion(selectedExamId, verId, op);
     setDiffVersionId(null);
   };
 
@@ -568,7 +582,12 @@ export default function ReportEditor() {
                       <button
                         key={e.id}
                         type="button"
-                        onClick={() => setSelectedExam(e.id)}
+                        onClick={() => {
+                          if (e.id !== selectedExamId) {
+                            setSelectedExam(e.id);
+                            navigate(`/report/${e.id}`, { replace: true });
+                          }
+                        }}
                         className={`group relative flex items-center gap-2.5 px-3.5 py-2 rounded-xl border text-xs transition-all ${
                           isActive
                             ? 'bg-gradient-to-r from-primary-500 to-cyan-500 text-white border-transparent shadow-md shadow-primary-500/30'

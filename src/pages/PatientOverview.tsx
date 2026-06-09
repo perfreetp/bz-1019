@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '@/store';
 import type { Patient, Examination } from '@/types';
 import {
@@ -43,9 +44,12 @@ const examTypeMap = {
   胃肠镜: { color: 'bg-violet-50 text-violet-600 border-violet-200', dot: 'bg-violet-500' },
 };
 
+interface SkippedPatient { patient: Patient; reason: string; }
+interface SkippedExam { exam: Examination; reason: string; }
+
 function parseCSV(csv: string): {
   patients: Patient[]; examinations: Examination[];
-  fileDupPatients: Patient[]; fileDupExams: Examination[];
+  fileDupPatients: SkippedPatient[]; fileDupExams: SkippedExam[];
 } {
   const lines = csv.replace(/\r/g, '').split('\n').filter((l) => l.trim());
   if (lines.length < 2) throw new Error('CSV 内容为空或只有表头');
@@ -57,10 +61,11 @@ function parseCSV(csv: string): {
 
   const patients: Patient[] = [];
   const examinations: Examination[] = [];
-  const fileDupPatients: Patient[] = [];
-  const fileDupExams: Examination[] = [];
+  const fileDupPatients: SkippedPatient[] = [];
+  const fileDupExams: SkippedExam[] = [];
   const patientIdSet = new Set<string>();
   const examIdSet = new Set<string>();
+  const examKeySet = new Set<string>();
 
   for (let i = 1; i < lines.length; i++) {
     const values = lines[i].split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((v) => v.replace(/^"|"$/g, '').trim());
@@ -90,17 +95,21 @@ function parseCSV(csv: string): {
         patientIdSet.add(row.id);
         patients.push(patient);
       } else {
-        fileDupPatients.push(patient);
+        fileDupPatients.push({ patient, reason: '文件内患者ID重复' });
       }
     }
 
     if (hasRowExam) {
+      const hasExplicitId = !!row.examId;
       const examId = row.examId || `E${row.id}-${i}`;
+      const examType = ((row.examType || '胃镜') as Examination['type']) || '胃镜';
+      const examDate = row.examDate || '2026-06-09';
+      const compositeKey = `${row.id}|${examDate}|${examType}`;
       const exam: Examination = {
         id: examId,
         patientId: row.id || '',
-        type: ((row.examType || '胃镜') as Examination['type']) || '胃镜',
-        examDate: row.examDate || '2026-06-09',
+        type: examType,
+        examDate,
         examTime: row.examTime || '09:00',
         room: row.room || '内镜1室',
         anesthesiaType: row.anesthesiaType || '静脉麻醉',
@@ -119,11 +128,14 @@ function parseCSV(csv: string): {
         preoperativeMedication: row.preoperativeMedication || '',
         processNotes: row.processNotes || '',
       };
-      if (!examIdSet.has(examId)) {
+      if (!hasExplicitId && examKeySet.has(compositeKey)) {
+        fileDupExams.push({ exam, reason: `同患者同日同类型重复（${examDate} ${examType}）` });
+      } else if (!examIdSet.has(examId)) {
         examIdSet.add(examId);
+        if (!hasExplicitId) examKeySet.add(compositeKey);
         examinations.push(exam);
       } else {
-        fileDupExams.push(exam);
+        fileDupExams.push({ exam, reason: `文件内检查编号${examId}重复` });
       }
     }
   }
@@ -132,7 +144,7 @@ function parseCSV(csv: string): {
 
 function parseJSON(text: string): {
   patients: Patient[]; examinations: Examination[];
-  fileDupPatients: Patient[]; fileDupExams: Examination[];
+  fileDupPatients: SkippedPatient[]; fileDupExams: SkippedExam[];
 } {
   const data = JSON.parse(text);
   let rawPatients: Patient[] = [];
@@ -150,27 +162,27 @@ function parseJSON(text: string): {
   }
   const patientIdSet = new Set<string>();
   const patients: Patient[] = [];
-  const fileDupPatients: Patient[] = [];
+  const fileDupPatients: SkippedPatient[] = [];
   for (const p of rawPatients) {
     if (p && p.id) {
       if (!patientIdSet.has(p.id)) {
         patientIdSet.add(p.id);
         patients.push(p);
       } else {
-        fileDupPatients.push(p);
+        fileDupPatients.push({ patient: p, reason: '文件内患者ID重复' });
       }
     }
   }
   const examIdSet = new Set<string>();
   const examinations: Examination[] = [];
-  const fileDupExams: Examination[] = [];
+  const fileDupExams: SkippedExam[] = [];
   for (const e of rawExams) {
     if (e && e.id) {
       if (!examIdSet.has(e.id)) {
         examIdSet.add(e.id);
         examinations.push(e);
       } else {
-        fileDupExams.push(e);
+        fileDupExams.push({ exam: e, reason: `文件内检查编号${e.id}重复` });
       }
     }
   }
@@ -210,6 +222,7 @@ function ImportToast() {
 }
 
 export default function PatientOverview() {
+  const navigate = useNavigate();
   const {
     patients,
     currentPatientId,
@@ -230,8 +243,8 @@ export default function PatientOverview() {
   const [importPreview, setImportPreview] = useState<{
     newPatients: Patient[];
     newExams: Examination[];
-    skippedPatients: Patient[];
-    skippedExams: Examination[];
+    skippedPatients: SkippedPatient[];
+    skippedExams: SkippedExam[];
     parsed: { patients: Patient[]; examinations: Examination[] };
   } | null>(null);
 
@@ -275,17 +288,23 @@ export default function PatientOverview() {
         const existingExamIds = new Set(examinations.map((e) => e.id));
 
         const newPatientsFromFile = parsed.patients.filter((p) => !existingPatientIds.has(p.id));
-        const skippedPatientsStore = parsed.patients.filter((p) => existingPatientIds.has(p.id));
+        const skippedPatientsStore: SkippedPatient[] = parsed.patients
+          .filter((p) => existingPatientIds.has(p.id))
+          .map((p) => ({ patient: p, reason: '系统中已存在该患者' }));
 
         const validExamPatientIds = new Set<string>([
           ...newPatientsFromFile.map((p) => p.id),
           ...patients.map((p) => p.id),
         ]);
         const examsWithValidPatient = parsed.examinations.filter((e) => validExamPatientIds.has(e.patientId));
-        const examsInvalidPatient = parsed.examinations.filter((e) => !validExamPatientIds.has(e.patientId));
+        const examsInvalidPatient: SkippedExam[] = parsed.examinations
+          .filter((e) => !validExamPatientIds.has(e.patientId))
+          .map((e) => ({ exam: e, reason: `关联患者ID（${e.patientId || '空'}）不存在` }));
 
         const newExamsFromFile = examsWithValidPatient.filter((e) => !existingExamIds.has(e.id));
-        const skippedExamsStore = examsWithValidPatient.filter((e) => existingExamIds.has(e.id));
+        const skippedExamsStore: SkippedExam[] = examsWithValidPatient
+          .filter((e) => existingExamIds.has(e.id))
+          .map((e) => ({ exam: e, reason: `系统中已存在检查${e.id}` }));
 
         const skippedPatients = [...skippedPatientsStore, ...parsed.fileDupPatients];
         const skippedExams = [...skippedExamsStore, ...parsed.fileDupExams, ...examsInvalidPatient];
@@ -746,20 +765,29 @@ export default function PatientOverview() {
                                   {status?.label}
                                 </span>
                                 {reportEditedRecently && (
-                                  <span
-                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border animate-pulse ${
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (exam.id !== selectedExamId) {
+                                        if (exam.patientId !== currentPatientId) setCurrentPatient(exam.patientId);
+                                        setSelectedExam(exam.id);
+                                      }
+                                      navigate(`/report/${exam.id}?version=latest`);
+                                    }}
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border animate-pulse hover:shadow-sm transition-all cursor-pointer ${
                                       reportEditedRecently.level === 'hot'
-                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                                        ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                        : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
                                     }`}
-                                    title={examReport?.lastEditedAt ? `最近编辑于 ${examReport.lastEditedAt}` : ''}
+                                    title={examReport?.lastEditedAt ? `最近编辑于 ${examReport.lastEditedAt}（点击查看版本）` : ''}
                                   >
                                     <History className="w-2.5 h-2.5" />
                                     {reportEditedRecently.text}
                                     {examReport?.versions && examReport.versions.length > 0 && (
                                       <span className="ml-0.5 opacity-70">·{examReport.versions.length}版</span>
                                     )}
-                                  </span>
+                                  </button>
                                 )}
                               </div>
                             </div>
@@ -992,23 +1020,23 @@ export default function PatientOverview() {
                       跳过 · 重复患者（{skippedPatients.length}）
                     </h4>
                     <div className="border border-slate-200 border-dashed rounded-xl overflow-hidden">
-                      <div className="max-h-[100px] overflow-y-auto divide-y divide-slate-100">
-                        {skippedPatients.map((p) => (
-                          <div key={p.id} className="flex items-center gap-3 px-4 py-2 bg-slate-50/70">
+                      <div className="max-h-[140px] overflow-y-auto divide-y divide-slate-100">
+                        {skippedPatients.map((sk, i) => (
+                          <div key={`${sk.patient.id}-${i}`} className="flex items-center gap-3 px-4 py-2.5 bg-slate-50/70">
                             <div className="w-7 h-7 rounded-md bg-slate-200 flex items-center justify-center text-slate-500 text-xs font-bold shrink-0">
-                              {p.name.charAt(0)}
+                              {sk.patient.name.charAt(0)}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="text-xs font-medium text-slate-600 truncate">
-                                {p.name}
+                                {sk.patient.name}
                                 <span className="ml-2 text-[10px] text-slate-400">
-                                  {p.gender} · {p.age}岁
+                                  {sk.patient.gender} · {sk.patient.age}岁
                                 </span>
                               </div>
-                              <div className="text-[10px] text-slate-400 font-mono">{p.id}</div>
+                              <div className="text-[10px] text-slate-400 font-mono">{sk.patient.id}</div>
                             </div>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 shrink-0">
-                              已存在，跳过
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100 shrink-0 font-medium max-w-[150px] truncate" title={sk.reason}>
+                              {sk.reason}
                             </span>
                           </div>
                         ))}
@@ -1024,20 +1052,20 @@ export default function PatientOverview() {
                       跳过 · 重复检查（{skippedExams.length}）
                     </h4>
                     <div className="border border-slate-200 border-dashed rounded-xl overflow-hidden">
-                      <div className="max-h-[100px] overflow-y-auto divide-y divide-slate-100">
-                        {skippedExams.map((e) => (
-                          <div key={e.id} className="flex items-center gap-3 px-4 py-2 bg-slate-50/70">
+                      <div className="max-h-[140px] overflow-y-auto divide-y divide-slate-100">
+                        {skippedExams.map((se, i) => (
+                          <div key={`${se.exam.id}-${i}`} className="flex items-center gap-3 px-4 py-2.5 bg-slate-50/70">
                             <div className="w-7 h-7 rounded-md bg-slate-200 text-slate-500 flex items-center justify-center font-mono text-[10px] shrink-0">
-                              {e.id.slice(-3)}
+                              {se.exam.id.slice(-3)}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="text-xs font-medium text-slate-600 truncate">
-                                {e.type} · {e.examDate}
+                                {se.exam.type} · {se.exam.examDate}
                               </div>
-                              <div className="text-[10px] text-slate-400 font-mono">{e.id}</div>
+                              <div className="text-[10px] text-slate-400 font-mono">{se.exam.id}</div>
                             </div>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 shrink-0">
-                              已存在，跳过
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100 shrink-0 font-medium max-w-[180px] truncate" title={se.reason}>
+                              {se.reason}
                             </span>
                           </div>
                         ))}

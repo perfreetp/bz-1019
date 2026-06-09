@@ -10,52 +10,55 @@ import {
   BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-const navItems = [
-  {
-    to: '/',
-    label: '患者概览',
-    Icon: UserRound,
-  },
-  {
-    to: '/examination/E001',
-    label: '检查记录',
-    Icon: ClipboardList,
-  },
-  {
-    to: '/annotation/E001',
-    label: '影像标注',
-    Icon: Images,
-  },
-  {
-    to: '/lesion/E001',
-    label: '病灶评估',
-    Icon: Target,
-  },
-  {
-    to: '/archive',
-    label: '病灶归档',
-    Icon: Layers,
-  },
-  {
-    to: '/report/E001',
-    label: '报告编辑',
-    Icon: FileEdit,
-  },
-  {
-    to: '/followup',
-    label: '随访提醒',
-    Icon: BellRing,
-    badge: 5,
-  },
-  {
-    to: '/quality',
-    label: '质控看板',
-    Icon: BarChart3,
-  },
-];
+import { useAppStore } from '@/store';
 
 export default function Sidebar() {
+  const selectedExamId = useAppStore((s) => s.selectedExamId) || 'E001';
+
+  const navItems = [
+    {
+      to: '/',
+      label: '患者概览',
+      Icon: UserRound,
+    },
+    {
+      to: `/examination/${selectedExamId}`,
+      label: '检查记录',
+      Icon: ClipboardList,
+    },
+    {
+      to: `/annotation/${selectedExamId}`,
+      label: '影像标注',
+      Icon: Images,
+    },
+    {
+      to: `/lesion/${selectedExamId}`,
+      label: '病灶评估',
+      Icon: Target,
+    },
+    {
+      to: '/archive',
+      label: '病灶归档',
+      Icon: Layers,
+    },
+    {
+      to: `/report/${selectedExamId}`,
+      label: '报告编辑',
+      Icon: FileEdit,
+    },
+    {
+      to: '/followup',
+      label: '随访提醒',
+      Icon: BellRing,
+      badge: 5,
+    },
+    {
+      to: '/quality',
+      label: '质控看板',
+      Icon: BarChart3,
+    },
+  ];
+
   return (
     <aside
       className={cn(
@@ -66,7 +69,7 @@ export default function Sidebar() {
       <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
         {navItems.map(({ to, label, Icon, badge }) => (
           <NavLink
-            key={to}
+            key={to.split('/')[1] || to}
             to={to}
             end={to === '/'}
             className={({ isActive }) =>
