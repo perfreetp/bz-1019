@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Plus, Trash2, Star } from 'lucide-react';
 import { useAppStore } from '../store';
 import type { Consumable } from '../types';
@@ -85,6 +86,18 @@ const inputBase =
   'w-full px-3.5 py-2.5 rounded-lg border border-slate-300 bg-white text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all';
 
 export default function ExaminationRecord() {
+  const { id: paramExamId } = useParams<{ id: string }>();
+  useEffect(() => {
+    if (paramExamId && paramExamId !== useAppStore.getState().selectedExamId) {
+      const s = useAppStore.getState();
+      const targetExam = s.examinations.find((e) => e.id === paramExamId);
+      if (targetExam) {
+        if (targetExam.patientId !== s.currentPatientId) s.setCurrentPatient(targetExam.patientId);
+        if (paramExamId !== s.selectedExamId) s.setSelectedExam(paramExamId);
+      }
+    }
+  }, [paramExamId]);
+
   const exam = useAppStore((s) => s.getCurrentExam());
   const selectedExamId = useAppStore((s) => s.selectedExamId);
   const updateExamField = useAppStore((s) => s.updateExamField);

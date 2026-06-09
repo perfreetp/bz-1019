@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMemo, useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   Plus,
   Trash2,
@@ -18,6 +18,7 @@ import {
   Image as ImageIcon,
   AlertCircle,
   Link2,
+  Layers,
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import type { Lesion, Biopsy } from '@/types';
@@ -80,6 +81,17 @@ export default function LesionAssessment() {
   const registerBiopsy = useAppStore((s) => s.registerBiopsy);
 
   const navigate = useNavigate();
+  const { id: paramExamId } = useParams<{ id: string }>();
+  useEffect(() => {
+    if (paramExamId && paramExamId !== useAppStore.getState().selectedExamId) {
+      const s = useAppStore.getState();
+      const targetExam = s.examinations.find((e) => e.id === paramExamId);
+      if (targetExam) {
+        if (targetExam.patientId !== s.currentPatientId) s.setCurrentPatient(targetExam.patientId);
+        if (paramExamId !== s.selectedExamId) s.setSelectedExam(paramExamId);
+      }
+    }
+  }, [paramExamId]);
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
 
   const examImages = useMemo(
@@ -354,6 +366,14 @@ export default function LesionAssessment() {
                   {totalExamAnnotations} 条
                 </span>
               )}
+            </button>
+
+            <button
+              onClick={() => navigate('/archive')}
+              className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-r from-fuchsia-50 to-violet-50 text-fuchsia-700 border border-fuchsia-200 hover:from-fuchsia-100 hover:to-violet-100 transition-all shadow-sm"
+            >
+              <Layers className="w-4 h-4" />
+              病灶归档
             </button>
           </div>
         </div>

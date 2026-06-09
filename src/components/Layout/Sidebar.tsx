@@ -4,6 +4,7 @@ import {
   ClipboardList,
   Images,
   Target,
+  Layers,
   FileEdit,
   BellRing,
   BarChart3,
@@ -30,6 +31,11 @@ const navItems = [
     to: '/lesion/E001',
     label: '病灶评估',
     Icon: Target,
+  },
+  {
+    to: '/archive',
+    label: '病灶归档',
+    Icon: Layers,
   },
   {
     to: '/report/E001',

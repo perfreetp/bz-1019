@@ -124,6 +124,28 @@ export interface Report {
   completenessScore: number;
   missingFields: string[];
   lastEditedAt: string;
+  versions?: ReportVersion[];
+}
+
+export type ReportVersionType = 'before_sign' | 'after_sign' | 'auto_save' | 'manual';
+
+export interface ReportVersion {
+  id: string;
+  versionType: ReportVersionType;
+  note?: string;
+  createdAt: string;
+  operatorName?: string;
+  snapshot: {
+    structuredFindings: string;
+    insertedTerms: string[];
+    diagnosis: string;
+    recommendations: string;
+    conclusion: string;
+    doctorSignature: string;
+    signedAt: string;
+    completenessScore: number;
+    missingFields: string[];
+  };
 }
 
 export interface Followup {

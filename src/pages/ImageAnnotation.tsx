@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAppStore } from '@/store';
 import type { Annotation, Lesion } from '@/types';
 import {
@@ -99,6 +99,17 @@ export default function ImageAnnotation() {
   const getCurrentExam = useAppStore((s) => s.getCurrentExam);
 
   const navigate = useNavigate();
+  const { id: paramExamId } = useParams<{ id: string }>();
+  useEffect(() => {
+    if (paramExamId && paramExamId !== useAppStore.getState().selectedExamId) {
+      const s = useAppStore.getState();
+      const targetExam = s.examinations.find((e) => e.id === paramExamId);
+      if (targetExam) {
+        if (targetExam.patientId !== s.currentPatientId) s.setCurrentPatient(targetExam.patientId);
+        if (paramExamId !== s.selectedExamId) s.setSelectedExam(paramExamId);
+      }
+    }
+  }, [paramExamId]);
   const exam = getCurrentExam();
 
   const examImages = useMemo(

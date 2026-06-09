@@ -5,6 +5,8 @@ import type {
   ImageItem,
   Lesion,
   Report,
+  ReportVersion,
+  ReportVersionType,
   Followup,
   Annotation,
   Consumable,
@@ -105,6 +107,9 @@ interface AppState {
   updateReportField: <K extends keyof Report>(field: K, value: Report[K]) => void;
   checkCompleteness: () => void;
   signReport: (doctorName: string) => void;
+  snapshotReport: (examId: string, versionType: ReportVersionType, note?: string, operatorName?: string) => void;
+  getReportVersions: (examId: string) => ReportVersion[];
+  restoreReportVersion: (examId: string, versionId: string) => void;
 
   createFollowup: (followup: Omit<Followup, 'id' | 'createdAt'>) => void;
   updateFollowup: (id: string, updates: Partial<Followup>) => void;
@@ -391,6 +396,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     signReport: (doctorName) => {
       const examId = get().selectedExamId;
+      get().snapshotReport(examId, 'before_sign', '签发前快照', doctorName);
       set((s) => ({
         reports: s.reports.map((r) =>
           r.examId === examId
@@ -400,6 +406,60 @@ export const useAppStore = create<AppState>((set, get) => {
         examinations: s.examinations.map((e) =>
           e.id === s.selectedExamId ? { ...e, status: 'signed' } : e,
         ),
+      }));
+      get().snapshotReport(examId, 'after_sign', '签发完成', doctorName);
+      persistState(get());
+    },
+
+    snapshotReport: (examId, versionType, note, operatorName) => {
+      const s = get();
+      const report = s.getReportByExamId(examId);
+      if (!report) return;
+      const { structuredFindings, insertedTerms, diagnosis, recommendations, conclusion, doctorSignature, signedAt, completenessScore, missingFields } = report;
+      const version: ReportVersion = {
+        id: `V${examId}-${Date.now()}`,
+        versionType,
+        note,
+        createdAt: nowStamp(),
+        operatorName,
+        snapshot: { structuredFindings, insertedTerms: [...insertedTerms], diagnosis, recommendations, conclusion, doctorSignature, signedAt, completenessScore, missingFields: [...missingFields] },
+      };
+      set((state) => ({
+        reports: state.reports.map((r) =>
+          r.examId === examId
+            ? { ...r, versions: [...(r.versions || []), version], lastEditedAt: nowStamp() }
+            : r,
+        ),
+      }));
+    },
+
+    getReportVersions: (examId) => {
+      const r = get().getReportByExamId(examId);
+      return r?.versions || [];
+    },
+
+    restoreReportVersion: (examId, versionId) => {
+      const r = get().getReportByExamId(examId);
+      if (!r) return;
+      const version = (r.versions || []).find((v) => v.id === versionId);
+      if (!version) return;
+      set((s) => ({
+        reports: s.reports.map((rep) => {
+          if (rep.examId !== examId) return rep;
+          return {
+            ...rep,
+            structuredFindings: version.snapshot.structuredFindings,
+            insertedTerms: [...version.snapshot.insertedTerms],
+            diagnosis: version.snapshot.diagnosis,
+            recommendations: version.snapshot.recommendations,
+            conclusion: version.snapshot.conclusion,
+            doctorSignature: version.snapshot.doctorSignature,
+            signedAt: version.snapshot.signedAt,
+            completenessScore: version.snapshot.completenessScore,
+            missingFields: [...version.snapshot.missingFields],
+            lastEditedAt: nowStamp(),
+          };
+        }),
       }));
       persistState(get());
     },

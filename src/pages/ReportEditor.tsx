@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
+import { useParams } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
   Sparkles,
@@ -19,11 +20,23 @@ import {
   Clock,
   ListChecks,
   CheckCircle2,
+  History,
+  Camera,
+  RotateCcw,
+  GitCompare,
+  Save,
+  ArrowRight,
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { termLibrary, searchTerms, type TermItem, type TermCategory } from '@/utils/termLibrary';
 import { exportPatientSummary, downloadText } from '@/utils/storage';
-import type { Report } from '@/types';
+import type { Report, ReportVersion, ReportVersionType } from '@/types';
+
+const examTypeMap: Record<string, { color: string; dot: string }> = {
+  胃镜: { color: 'bg-rose-50 text-rose-600 border-rose-200', dot: 'bg-rose-500' },
+  肠镜: { color: 'bg-sky-50 text-sky-600 border-sky-200', dot: 'bg-sky-500' },
+  胃肠镜: { color: 'bg-violet-50 text-violet-600 border-violet-200', dot: 'bg-violet-500' },
+};
 
 type InsertTarget = 'findings' | 'diagnosis' | 'recommendations' | 'conclusion';
 
@@ -83,18 +96,39 @@ function CircularProgress({ value, size = 44, strokeWidth = 5 }: CircularProgres
 
 export default function ReportEditor() {
   const reports = useAppStore((s) => s.reports);
+  const allExaminations = useAppStore((s) => s.examinations);
   const generateFindings = useAppStore((s) => s.generateFindings);
   const updateReportField = useAppStore((s) => s.updateReportField);
   const checkCompleteness = useAppStore((s) => s.checkCompleteness);
   const signReport = useAppStore((s) => s.signReport);
+  const snapshotReport = useAppStore((s) => s.snapshotReport);
+  const getReportVersions = useAppStore((s) => s.getReportVersions);
+  const restoreReportVersion = useAppStore((s) => s.restoreReportVersion);
   const getCurrentPatient = useAppStore((s) => s.getCurrentPatient);
   const getCurrentExam = useAppStore((s) => s.getCurrentExam);
   const getCurrentReport = useAppStore((s) => s.getCurrentReport);
   const selectedExamId = useAppStore((s) => s.selectedExamId);
   const currentPatientId = useAppStore((s) => s.currentPatientId);
+  const setSelectedExam = useAppStore((s) => s.setSelectedExam);
 
   const checkCompletenessRef = useRef(checkCompleteness);
   checkCompletenessRef.current = checkCompleteness;
+
+  const { id: paramExamId } = useParams<{ id: string }>();
+  useEffect(() => {
+    if (paramExamId && paramExamId !== useAppStore.getState().selectedExamId) {
+      const s = useAppStore.getState();
+      const targetExam = s.examinations.find((e) => e.id === paramExamId);
+      if (targetExam) {
+        if (targetExam.patientId !== s.currentPatientId) {
+          s.setCurrentPatient(targetExam.patientId);
+        }
+        if (paramExamId !== s.selectedExamId) {
+          s.setSelectedExam(paramExamId);
+        }
+      }
+    }
+  }, [paramExamId]);
 
   const patient = getCurrentPatient();
   const exam = getCurrentExam();
@@ -104,12 +138,42 @@ export default function ReportEditor() {
     doctorSignature: '', signedAt: '', completenessScore: 0, missingFields: [], lastEditedAt: '',
   } as Report;
 
+  const patientExams = useMemo(
+    () => allExaminations.filter((e) => e.patientId === currentPatientId).sort((a, b) => b.examDate.localeCompare(a.examDate)),
+    [allExaminations, currentPatientId]
+  );
+
   const patientReports = useMemo(() => {
     if (!patient) return [];
-    const patientExamIds = new Set<string>();
-    useAppStore.getState().examinations.filter(e => e.patientId === currentPatientId).forEach(e => patientExamIds.add(e.id));
-    return reports.filter(r => patientExamIds.has(r.examId) || false);
-  }, [reports, currentPatientId, patient]);
+    const patientExamIds = new Set<string>(patientExams.map((e) => e.id));
+    return reports.filter((r) => patientExamIds.has(r.examId));
+  }, [reports, patientExams, patient]);
+
+  const reportVersions = useMemo(
+    () => [...(report.versions || [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [report.versions, selectedExamId]
+  );
+
+  const [showVersionsPanel, setShowVersionsPanel] = useState(false);
+  const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
+
+  const versionTypeLabels: Record<ReportVersionType, { label: string; color: string; icon: React.ComponentType<{ className?: string }> }> = {
+    before_sign: { label: '签发前', color: 'bg-amber-50 text-amber-700 border-amber-200', icon: Clock },
+    after_sign: { label: '已签发', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: PenLine },
+    auto_save: { label: '自动保存', color: 'bg-sky-50 text-sky-700 border-sky-200', icon: History },
+    manual: { label: '手动快照', color: 'bg-violet-50 text-violet-700 border-violet-200', icon: Camera },
+  };
+
+  const handleSnapshot = () => {
+    const note = prompt('请输入版本备注（可选）：', '');
+    snapshotReport(selectedExamId, 'manual', note || undefined);
+  };
+
+  const handleRestore = (verId: string) => {
+    if (!confirm('确定要恢复到此版本吗？当前编辑内容会被覆盖。')) return;
+    restoreReportVersion(selectedExamId, verId);
+    setDiffVersionId(null);
+  };
 
   const [searchKeyword, setSearchKeyword] = useState('');
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>(
@@ -488,6 +552,52 @@ export default function ReportEditor() {
 
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="shrink-0 px-6 py-4 bg-white border-b border-slate-200">
+            {patientExams.length > 1 && (
+              <div className="mb-4 pb-4 border-b border-slate-100">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <History className="w-3.5 h-3.5 text-slate-500" />
+                  <span className="text-xs font-semibold text-slate-600 tracking-wide">同一患者检查时间轴（可切换）</span>
+                  <span className="ml-1 text-[11px] text-slate-400">共 {patientExams.length} 次</span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {patientExams.map((e, idx) => {
+                    const r = patientReports.find((pr) => pr.examId === e.id);
+                    const typeStyle = examTypeMap[e.type as keyof typeof examTypeMap] || examTypeMap['胃镜'];
+                    const isActive = e.id === selectedExamId;
+                    return (
+                      <button
+                        key={e.id}
+                        type="button"
+                        onClick={() => setSelectedExam(e.id)}
+                        className={`group relative flex items-center gap-2.5 px-3.5 py-2 rounded-xl border text-xs transition-all ${
+                          isActive
+                            ? 'bg-gradient-to-r from-primary-500 to-cyan-500 text-white border-transparent shadow-md shadow-primary-500/30'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-primary-300 hover:bg-white hover:shadow-sm'
+                        }`}
+                      >
+                        {idx < patientExams.length - 1 && (
+                          <div className={`absolute left-full top-1/2 -translate-y-1/2 w-3 h-px ${isActive ? 'bg-primary-200' : 'bg-slate-300'}`} style={{ marginLeft: '-2px' }} />
+                        )}
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${isActive ? 'bg-white/25' : typeStyle?.color || 'bg-primary-100 text-primary-700'}`}>
+                          {idx + 1}
+                        </span>
+                        <div className="text-left leading-tight">
+                          <div className="font-semibold">
+                            {e.type} · {e.examDate.replace(/-/g, '/')}
+                          </div>
+                          <div className={`mt-0.5 text-[10px] ${isActive ? 'text-white/75' : 'text-slate-500'} font-mono`}>
+                            {e.examTime} · {e.id}
+                          </div>
+                        </div>
+                        {r?.doctorSignature && (
+                          <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-emerald-200' : 'text-emerald-500'}`} />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200">
                 <Clock className="w-3.5 h-3.5 text-slate-400" />
@@ -544,6 +654,35 @@ export default function ReportEditor() {
               </div>
               <span className="text-sm font-medium">检查完整性</span>
               <CircularProgress value={report.completenessScore || 0} />
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSnapshot}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-violet-200 text-violet-700 rounded-xl hover:border-violet-400 hover:bg-violet-50 transition-all"
+            >
+              <Camera className="w-4 h-4" />
+              <span className="text-sm font-medium">保存快照</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowVersionsPanel(!showVersionsPanel)}
+              className={`relative inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border transition-all ${
+                showVersionsPanel
+                  ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white border-transparent shadow-md shadow-violet-500/30'
+                  : 'bg-white border-violet-200 text-violet-700 hover:border-violet-400 hover:bg-violet-50'
+              }`}
+            >
+              <History className="w-4 h-4" />
+              <span className="text-sm font-medium">版本历史</span>
+              {reportVersions.length > 0 && (
+                <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                  showVersionsPanel ? 'bg-white/25 text-white' : 'bg-violet-100 text-violet-700'
+                }`}>
+                  {reportVersions.length}
+                </span>
+              )}
             </button>
 
             <div className="flex-1" />
@@ -810,6 +949,174 @@ export default function ReportEditor() {
                   return content;
                 })()}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showVersionsPanel && (
+        <div className="fixed inset-0 z-40 flex justify-end">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]" onClick={() => setShowVersionsPanel(false)} />
+          <div className="relative w-[440px] max-w-[90vw] bg-white shadow-2xl h-full flex flex-col animate-[slideInFromRight_0.3s_ease-out]">
+            <div className="shrink-0 px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-violet-50 to-fuchsia-50">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center shadow-sm">
+                  <History className="w-4.5 h-4.5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 tracking-wide">版本历史</h3>
+                  <p className="text-[11px] text-slate-500">共 {reportVersions.length} 个版本 · 签发时自动保存</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowVersionsPanel(false); setDiffVersionId(null); }}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white/80 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {reportVersions.length === 0 ? (
+                <div className="p-12 text-center">
+                  <div className="w-16 h-16 mx-auto rounded-2xl bg-slate-100 flex items-center justify-center mb-3">
+                    <Camera className="w-8 h-8 text-slate-300" />
+                  </div>
+                  <p className="text-sm text-slate-600 mb-1">暂无版本记录</p>
+                  <p className="text-xs text-slate-400">签发报告时会自动保存版本快照<br />也可以点击「保存快照」手动创建</p>
+                </div>
+              ) : (
+                <div className="p-4 space-y-3">
+                  {reportVersions.map((ver, idx) => {
+                    const cfg = versionTypeLabels[ver.versionType];
+                    const Icon = cfg.icon;
+                    const isDiffing = diffVersionId === ver.id;
+                    return (
+                      <div key={ver.id} className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+                        <div className={`p-4 ${isDiffing ? 'bg-violet-50/70' : 'bg-white'}`}>
+                          <div className="flex items-start gap-3">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${cfg.color} border`}>
+                              <Icon className="w-4.5 h-4.5" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold ${cfg.color}`}>
+                                  {cfg.label}
+                                </span>
+                                <span className="text-xs font-bold text-slate-800">#{reportVersions.length - idx}</span>
+                                {idx === 0 && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-slate-800 text-white text-[10px] font-semibold">
+                                    当前基准
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-slate-700 font-mono mb-0.5">{ver.createdAt}</div>
+                              {ver.operatorName && (
+                                <div className="text-[11px] text-slate-500">操作人：<span className="text-slate-700 font-medium">{ver.operatorName}</span></div>
+                              )}
+                              {ver.note && (
+                                <div className="mt-1.5 text-[11px] text-violet-700 bg-violet-50 rounded-lg px-2 py-1.5 border border-violet-100">
+                                  📝 {ver.note}
+                                </div>
+                              )}
+                              <div className="text-[10px] text-slate-400 mt-1.5 font-mono">v{ver.id.slice(-6)}</div>
+                            </div>
+                          </div>
+
+                          <div className="mt-3.5 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDiffVersionId(isDiffing ? null : ver.id)}
+                              className={`flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                                isDiffing
+                                  ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-sm shadow-violet-500/20'
+                                  : 'bg-slate-50 text-slate-700 border border-slate-200 hover:border-violet-300 hover:text-violet-700 hover:bg-violet-50'
+                              }`}
+                            >
+                              <GitCompare className="w-3.5 h-3.5" />
+                              {isDiffing ? '关闭差异' : '查看差异'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRestore(ver.id)}
+                              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-white border border-rose-200 text-rose-700 hover:border-rose-400 hover:bg-rose-50 transition-all"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              恢复此版本
+                            </button>
+                          </div>
+                        </div>
+
+                        {isDiffing && (() => {
+                          const fields: Array<{ key: keyof typeof ver.snapshot; label: string; isText?: boolean }> = [
+                            { key: 'structuredFindings', label: '结构化所见', isText: true },
+                            { key: 'diagnosis', label: '诊断', isText: true },
+                            { key: 'recommendations', label: '建议', isText: true },
+                            { key: 'conclusion', label: '结论', isText: true },
+                            { key: 'doctorSignature', label: '签发医生' },
+                            { key: 'completenessScore', label: '完整性评分' },
+                          ];
+                          return (
+                            <div className="border-t border-violet-100 bg-gradient-to-br from-slate-50 to-white p-4 space-y-3">
+                              <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                                <GitCompare className="w-3.5 h-3.5 text-violet-600" />
+                                <span className="text-xs font-bold text-slate-700">与当前版本对比</span>
+                              </div>
+                              {fields.map(({ key, label, isText }) => {
+                                const oldVal = typeof ver.snapshot[key] === 'number' ? String(ver.snapshot[key]) : (ver.snapshot[key] as string) || '';
+                                const curVal = typeof report[key as keyof typeof report] === 'number' ? String(report[key as keyof typeof report]) : (report[key as keyof typeof report] as string) || '';
+                                const isSame = oldVal === curVal;
+                                if (isText && !oldVal && !curVal) return null;
+                                if (isSame && !oldVal) return null;
+                                return (
+                                  <div key={key} className={`rounded-lg border p-3 ${isSame ? 'border-emerald-100 bg-emerald-50/40' : 'border-amber-100 bg-amber-50/40'}`}>
+                                    <div className="flex items-center gap-1.5 mb-2">
+                                      {isSame ? (
+                                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                      ) : (
+                                        <AlertCircle className="w-3 h-3 text-amber-600" />
+                                      )}
+                                      <span className="text-[11px] font-bold text-slate-700">{label}</span>
+                                      {!isSame && <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-md bg-amber-200 text-amber-800 font-semibold">有变化</span>}
+                                    </div>
+                                    {isText ? (
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                          <div className="text-[10px] text-slate-400 mb-1 font-medium">该版本</div>
+                                          <div className="text-[11px] text-slate-700 bg-white rounded-md p-2 border border-slate-200 whitespace-pre-wrap max-h-28 overflow-y-auto">
+                                            {oldVal || <span className="text-slate-400">（空）</span>}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-[10px] text-slate-400 mb-1 font-medium">当前版本</div>
+                                          <div className="text-[11px] text-slate-700 bg-white rounded-md p-2 border border-slate-200 whitespace-pre-wrap max-h-28 overflow-y-auto">
+                                            {curVal || <span className="text-slate-400">（空）</span>}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center gap-3 text-[11px]">
+                                        <span className="px-2 py-1 rounded-md bg-white border border-slate-200 text-slate-700 font-mono">
+                                          {oldVal || <span className="text-slate-400">空</span>}
+                                        </span>
+                                        <ArrowRight className="w-3 h-3 text-slate-400" />
+                                        <span className="px-2 py-1 rounded-md bg-white border border-slate-200 text-slate-700 font-mono">
+                                          {curVal || <span className="text-slate-400">空</span>}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>

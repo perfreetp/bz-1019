@@ -27,6 +27,7 @@ import {
   CheckCircle2,
   Info,
   Upload,
+  History,
 } from 'lucide-react';
 
 const statusMap = {
@@ -42,80 +43,138 @@ const examTypeMap = {
   胃肠镜: { color: 'bg-violet-50 text-violet-600 border-violet-200', dot: 'bg-violet-500' },
 };
 
-function parseCSV(csv: string): { patients: Patient[]; examinations: Examination[] } {
+function parseCSV(csv: string): {
+  patients: Patient[]; examinations: Examination[];
+  fileDupPatients: Patient[]; fileDupExams: Examination[];
+} {
   const lines = csv.replace(/\r/g, '').split('\n').filter((l) => l.trim());
   if (lines.length < 2) throw new Error('CSV 内容为空或只有表头');
   const headers = lines[0].split(',').map((h) => h.trim());
   const requiredFields = ['id', 'name', 'gender', 'age'];
-  for (const f of requiredFields) {
-    if (!headers.includes(f)) throw new Error(`缺少必填列: ${f}`);
-  }
+  const hasPatientFields = requiredFields.every((f) => headers.includes(f));
+  const hasExamFields = headers.includes('examId') || headers.includes('examDate');
+  if (!hasPatientFields && !hasExamFields) throw new Error('缺少必填列：至少需要患者列(id/name/gender/age)或检查列(examId/examDate)');
+
   const patients: Patient[] = [];
   const examinations: Examination[] = [];
-  const idSet = new Set<string>();
+  const fileDupPatients: Patient[] = [];
+  const fileDupExams: Examination[] = [];
+  const patientIdSet = new Set<string>();
+  const examIdSet = new Set<string>();
+
   for (let i = 1; i < lines.length; i++) {
     const values = lines[i].split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((v) => v.replace(/^"|"$/g, '').trim());
     const row: Record<string, string> = {};
     headers.forEach((h, idx) => (row[h] = values[idx] || ''));
-    if (!row.id || !row.name) continue;
-    if (idSet.has(row.id)) continue;
-    idSet.add(row.id);
-    const gender = (row.gender === '女' ? '女' : '男') as Patient['gender'];
-    const patient: Patient = {
-      id: row.id,
-      name: row.name,
-      gender,
-      age: parseInt(row.age) || 0,
-      idCard: row.idCard || '',
-      phone: row.phone || '',
-      chiefComplaint: row.chiefComplaint || '',
-      allergyHistory: row.allergyHistory ? row.allergyHistory.split(/[、;；]/).filter(Boolean) : [],
-      pastHistory: [],
-      labResults: [],
-      bmi: row.bmi ? parseFloat(row.bmi) : undefined,
-      appointmentDate: row.appointmentDate || row.examDate,
-    };
-    patients.push(patient);
-    const examId = row.examId || `E${row.id}`;
-    const exam: Examination = {
-      id: examId,
-      patientId: patient.id,
-      type: ((row.examType || '胃镜') as Examination['type']) || '胃镜',
-      examDate: row.examDate || '2026-06-09',
-      examTime: row.examTime || '09:00',
-      room: row.room || '内镜1室',
-      anesthesiaType: row.anesthesiaType || '静脉麻醉',
-      preoperativeDiagnosis: row.preoperativeDiagnosis || row.chiefComplaint || '',
-      bostonScore: parseInt(row.bostonScore) || 0,
-      asaGrade: row.asaGrade || '',
-      endoscopeModel: row.endoscopeModel || '',
-      insertionTime: row.insertionTime || '',
-      deepestReached: row.deepestReached || '',
-      withdrawalTime: row.withdrawalTime || '',
-      operatorName: row.operatorName || '',
-      assistantName: row.assistantName || '',
-      consumables: [],
-      contraindications: [],
-      status: 'pending',
-      preoperativeMedication: row.preoperativeMedication || '',
-      processNotes: row.processNotes || '',
-    };
-    examinations.push(exam);
+
+    const hasRowPatient = row.id && row.name;
+    const hasRowExam = row.examId || (row.examDate && row.id);
+
+    if (hasRowPatient) {
+      const gender = (row.gender === '女' ? '女' : '男') as Patient['gender'];
+      const patient: Patient = {
+        id: row.id,
+        name: row.name,
+        gender,
+        age: parseInt(row.age) || 0,
+        idCard: row.idCard || '',
+        phone: row.phone || '',
+        chiefComplaint: row.chiefComplaint || '',
+        allergyHistory: row.allergyHistory ? row.allergyHistory.split(/[、;；]/).filter(Boolean) : [],
+        pastHistory: [],
+        labResults: [],
+        bmi: row.bmi ? parseFloat(row.bmi) : undefined,
+        appointmentDate: row.appointmentDate || row.examDate,
+      };
+      if (!patientIdSet.has(row.id)) {
+        patientIdSet.add(row.id);
+        patients.push(patient);
+      } else {
+        fileDupPatients.push(patient);
+      }
+    }
+
+    if (hasRowExam) {
+      const examId = row.examId || `E${row.id}-${i}`;
+      const exam: Examination = {
+        id: examId,
+        patientId: row.id || '',
+        type: ((row.examType || '胃镜') as Examination['type']) || '胃镜',
+        examDate: row.examDate || '2026-06-09',
+        examTime: row.examTime || '09:00',
+        room: row.room || '内镜1室',
+        anesthesiaType: row.anesthesiaType || '静脉麻醉',
+        preoperativeDiagnosis: row.preoperativeDiagnosis || row.chiefComplaint || '',
+        bostonScore: parseInt(row.bostonScore) || 0,
+        asaGrade: row.asaGrade || '',
+        endoscopeModel: row.endoscopeModel || '',
+        insertionTime: row.insertionTime || '',
+        deepestReached: row.deepestReached || '',
+        withdrawalTime: row.withdrawalTime || '',
+        operatorName: row.operatorName || '',
+        assistantName: row.assistantName || '',
+        consumables: [],
+        contraindications: [],
+        status: 'pending',
+        preoperativeMedication: row.preoperativeMedication || '',
+        processNotes: row.processNotes || '',
+      };
+      if (!examIdSet.has(examId)) {
+        examIdSet.add(examId);
+        examinations.push(exam);
+      } else {
+        fileDupExams.push(exam);
+      }
+    }
   }
-  return { patients, examinations };
+  return { patients, examinations, fileDupPatients, fileDupExams };
 }
 
-function parseJSON(text: string): { patients: Patient[]; examinations: Examination[] } {
+function parseJSON(text: string): {
+  patients: Patient[]; examinations: Examination[];
+  fileDupPatients: Patient[]; fileDupExams: Examination[];
+} {
   const data = JSON.parse(text);
+  let rawPatients: Patient[] = [];
+  let rawExams: Examination[] = [];
   if (Array.isArray(data)) {
-    return { patients: data as Patient[], examinations: [] };
+    rawPatients = data as Patient[];
+  } else if (data) {
+    if (Array.isArray(data.patients)) rawPatients = data.patients as Patient[];
+    else if (Array.isArray(data.items)) rawPatients = data.items as Patient[];
+    if (Array.isArray(data.examinations)) rawExams = data.examinations as Examination[];
+    else if (Array.isArray(data.exams)) rawExams = data.exams as Examination[];
   }
-  if (data && (Array.isArray(data.patients) || Array.isArray(data.items))) {
-    const arr = (data.patients || data.items || []) as Patient[];
-    const exams = (data.examinations || []) as Examination[];
-    return { patients: arr, examinations: exams };
+  if (rawPatients.length === 0 && rawExams.length === 0) {
+    throw new Error('JSON 结构不支持，需是数组或包含 patients/examinations 字段的对象');
   }
-  throw new Error('JSON 结构不支持，需是数组或包含 patients 字段的对象');
+  const patientIdSet = new Set<string>();
+  const patients: Patient[] = [];
+  const fileDupPatients: Patient[] = [];
+  for (const p of rawPatients) {
+    if (p && p.id) {
+      if (!patientIdSet.has(p.id)) {
+        patientIdSet.add(p.id);
+        patients.push(p);
+      } else {
+        fileDupPatients.push(p);
+      }
+    }
+  }
+  const examIdSet = new Set<string>();
+  const examinations: Examination[] = [];
+  const fileDupExams: Examination[] = [];
+  for (const e of rawExams) {
+    if (e && e.id) {
+      if (!examIdSet.has(e.id)) {
+        examIdSet.add(e.id);
+        examinations.push(e);
+      } else {
+        fileDupExams.push(e);
+      }
+    }
+  }
+  return { patients, examinations, fileDupPatients, fileDupExams };
 }
 
 function ImportToast() {
@@ -154,9 +213,12 @@ export default function PatientOverview() {
   const {
     patients,
     currentPatientId,
+    selectedExamId,
     setCurrentPatient,
+    setSelectedExam,
     getCurrentPatient,
     examinations,
+    reports,
     importAppointments,
     importNotification,
     setImportNotification,
@@ -204,15 +266,44 @@ export default function PatientOverview() {
           try { parsed = parseJSON(text); } catch { parsed = parseCSV(text); }
         }
         if (!parsed.patients || parsed.patients.length === 0) {
-          throw new Error('未解析到任何有效患者记录');
+          if (!parsed.examinations || parsed.examinations.length === 0) {
+            throw new Error('未解析到任何有效患者或检查记录');
+          }
         }
+
         const existingPatientIds = new Set(patients.map((p) => p.id));
         const existingExamIds = new Set(examinations.map((e) => e.id));
-        const newPatients = parsed.patients.filter((p) => !existingPatientIds.has(p.id));
-        const skippedPatients = parsed.patients.filter((p) => existingPatientIds.has(p.id));
-        const newExams = parsed.examinations.filter((e) => !existingExamIds.has(e.id));
-        const skippedExams = parsed.examinations.filter((e) => existingExamIds.has(e.id));
-        setImportPreview({ newPatients, newExams, skippedPatients, skippedExams, parsed });
+
+        const newPatientsFromFile = parsed.patients.filter((p) => !existingPatientIds.has(p.id));
+        const skippedPatientsStore = parsed.patients.filter((p) => existingPatientIds.has(p.id));
+
+        const validExamPatientIds = new Set<string>([
+          ...newPatientsFromFile.map((p) => p.id),
+          ...patients.map((p) => p.id),
+        ]);
+        const examsWithValidPatient = parsed.examinations.filter((e) => validExamPatientIds.has(e.patientId));
+        const examsInvalidPatient = parsed.examinations.filter((e) => !validExamPatientIds.has(e.patientId));
+
+        const newExamsFromFile = examsWithValidPatient.filter((e) => !existingExamIds.has(e.id));
+        const skippedExamsStore = examsWithValidPatient.filter((e) => existingExamIds.has(e.id));
+
+        const skippedPatients = [...skippedPatientsStore, ...parsed.fileDupPatients];
+        const skippedExams = [...skippedExamsStore, ...parsed.fileDupExams, ...examsInvalidPatient];
+
+        const fullParsed = {
+          patients: parsed.patients,
+          examinations: parsed.examinations,
+          fileDupPatients: parsed.fileDupPatients,
+          fileDupExams: parsed.fileDupExams,
+          examsInvalidPatient,
+        };
+        setImportPreview({
+          newPatients: newPatientsFromFile,
+          newExams: newExamsFromFile,
+          skippedPatients,
+          skippedExams,
+          parsed: fullParsed as any,
+        });
       } catch (err: any) {
         console.error('[Import error]', err);
         setImportNotification({
@@ -226,21 +317,24 @@ export default function PatientOverview() {
 
   const confirmImport = () => {
     if (!importPreview) return;
-    const { parsed, newPatients, newExams } = importPreview;
-    const { added } = importAppointments(parsed);
-    const total = parsed.patients.length;
-    const examCount = parsed.examinations.length;
-    if (added === 0 && total > 0) {
-      setImportNotification({
-        type: 'info',
-        message: `共 ${total} 条患者记录已存在，已自动跳过。请检查患者 ID 是否重复。`,
-      });
-    } else {
-      setImportNotification({
-        type: 'success',
-        message: `导入成功！已新增 ${added} 位患者${examCount ? `、${newExams.length} 条检查安排` : ''}，${total - added > 0 ? `${total - added} 条重复已跳过。` : '患者下拉和今日日程已更新。'}`,
-      });
+    const { newPatients, newExams } = importPreview;
+    if (newPatients.length === 0 && newExams.length === 0) {
+      setImportPreview(null);
+      setImportNotification({ type: 'info', message: '没有可导入的新记录。' });
+      return;
     }
+    const result = importAppointments({ patients: newPatients, examinations: newExams });
+    const examCount = newExams.length;
+    const totalPatientCount = importPreview.parsed?.patients?.length || 0;
+    const totalExamCount = importPreview.parsed?.examinations?.length || 0;
+    const msgParts: string[] = [];
+    if (result.added > 0) msgParts.push(`新增 ${result.added} 位患者`);
+    if (examCount > 0) msgParts.push(`新增 ${examCount} 条检查安排`);
+    const skippedCount = totalPatientCount + totalExamCount - (result.added + examCount);
+    setImportNotification({
+      type: 'success',
+      message: `导入成功！${msgParts.join('，')}。${skippedCount > 0 ? `另有 ${skippedCount} 条重复或无效记录已跳过。` : '患者下拉和今日日程已更新。'}`,
+    });
     setImportPreview(null);
   };
 
@@ -595,12 +689,33 @@ export default function PatientOverview() {
                     const status = statusMap[exam.status as keyof typeof statusMap];
                     const style = examTypeMap[exam.type as keyof typeof examTypeMap];
                     const isCurrent = exam.patientId === currentPatientId;
+                    const isActiveExam = exam.id === selectedExamId;
+                    const examReport = reports.find((r) => r.examId === exam.id);
+                    const reportEditedRecently = (() => {
+                      if (!examReport || !examReport.lastEditedAt) return null;
+                      try {
+                        const t = new Date(examReport.lastEditedAt.replace(/-/g, '/')).getTime();
+                        const now = Date.now();
+                        const hoursAgo = (now - t) / 3600000;
+                        if (hoursAgo < 0) return null;
+                        if (hoursAgo < 24) return { level: 'hot' as const, text: '24h 内修改' };
+                        if (hoursAgo < 72) return { level: 'warm' as const, text: `${Math.floor(hoursAgo / 24)} 天前修改` };
+                        return null;
+                      } catch {
+                        return null;
+                      }
+                    })();
                     return (
                       <button
                         key={exam.id}
-                        onClick={() => setCurrentPatient(exam.patientId)}
+                        onClick={() => {
+                          if (exam.patientId !== currentPatientId) setCurrentPatient(exam.patientId);
+                          if (exam.id !== selectedExamId) setSelectedExam(exam.id);
+                        }}
                         className={`w-full text-left p-4 rounded-xl border transition-all ${
-                          isCurrent
+                          isActiveExam
+                            ? 'bg-gradient-to-r from-blue-100 to-cyan-100 border-blue-300 shadow ring-2 ring-blue-200'
+                            : isCurrent
                             ? 'bg-gradient-to-r from-blue-50 to-cyan-50 border-blue-200 shadow-sm'
                             : 'bg-white border-slate-100 hover:border-slate-200 hover:shadow-sm'
                         }`}
@@ -618,17 +733,35 @@ export default function PatientOverview() {
                               <span className="text-sm font-semibold text-slate-800 truncate">
                                 {p?.name}
                               </span>
-                              <span
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium shrink-0 ${status?.color}`}
-                              >
-                                {exam.status === 'in_progress' && (
-                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                              <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${status?.color}`}
+                                >
+                                  {exam.status === 'in_progress' && (
+                                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                  )}
+                                  {exam.status === 'completed' && (
+                                    <CheckCircle className="w-2.5 h-2.5" />
+                                  )}
+                                  {status?.label}
+                                </span>
+                                {reportEditedRecently && (
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border animate-pulse ${
+                                      reportEditedRecently.level === 'hot'
+                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                                    }`}
+                                    title={examReport?.lastEditedAt ? `最近编辑于 ${examReport.lastEditedAt}` : ''}
+                                  >
+                                    <History className="w-2.5 h-2.5" />
+                                    {reportEditedRecently.text}
+                                    {examReport?.versions && examReport.versions.length > 0 && (
+                                      <span className="ml-0.5 opacity-70">·{examReport.versions.length}版</span>
+                                    )}
+                                  </span>
                                 )}
-                                {exam.status === 'completed' && (
-                                  <CheckCircle className="w-2.5 h-2.5" />
-                                )}
-                                {status?.label}
-                              </span>
+                              </div>
                             </div>
                             <div className="flex items-center gap-2 text-xs text-slate-500 mb-2">
                               <span
