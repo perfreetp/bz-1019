@@ -290,6 +290,8 @@ export default function ExaminationRecord() {
                 rows={3}
                 className={`${inputBase} resize-none`}
                 placeholder="请输入术前用药情况，如：地西泮5mg肌注，东莨菪碱0.3mg肌注..."
+                value={exam.preoperativeMedication}
+                onChange={(e) => handleChange('preoperativeMedication', e.target.value)}
               />
             </FormField>
           </div>
@@ -455,6 +457,8 @@ export default function ExaminationRecord() {
                   rows={4}
                   className={`${inputBase} resize-none`}
                   placeholder="请记录操作过程中的异常情况、特殊处理等..."
+                  value={exam.processNotes}
+                  onChange={(e) => handleChange('processNotes', e.target.value)}
                 />
               </FormField>
             </div>

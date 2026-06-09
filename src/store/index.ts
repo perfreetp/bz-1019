@@ -14,20 +14,20 @@ import {
   mockExaminations,
   mockImages,
   mockLesions,
-  mockReport,
+  mockReports,
   mockFollowups,
 } from '../utils/mockData';
 import { generateStructuredFindings, checkReportCompleteness } from '../utils/reportGenerator';
 import { saveToStorage, loadFromStorage } from '../utils/storage';
 
-const PERSIST_KEY = 'app-state-v1';
+const PERSIST_KEY = 'app-state-v2';
 const PERSIST_FIELDS = [
   'currentPatientId',
   'patients',
   'examinations',
   'images',
   'lesions',
-  'report',
+  'reports',
   'followups',
   'selectedExamId',
   'selectedImageId',
@@ -36,13 +36,36 @@ const PERSIST_FIELDS = [
   'currentAnnotationColor',
 ] as const;
 
+function emptyReportForExam(examId: string): Report {
+  return {
+    id: `R${examId}-${Date.now()}`,
+    examId,
+    structuredFindings: '',
+    insertedTerms: [],
+    diagnosis: '',
+    recommendations: '',
+    conclusion: '',
+    doctorSignature: '',
+    signedAt: '',
+    completenessScore: 0,
+    missingFields: [],
+    lastEditedAt: '',
+  };
+}
+
+function nowStamp() {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 interface AppState {
   currentPatientId: string;
   patients: Patient[];
   examinations: Examination[];
   images: ImageItem[];
   lesions: Lesion[];
-  report: Report;
+  reports: Report[];
   followups: Followup[];
   selectedExamId: string;
   selectedImageId: string;
@@ -55,7 +78,7 @@ interface AppState {
 
   setCurrentPatient: (id: string) => void;
   addPatient: (patient: Patient) => void;
-  importAppointments: (payload: { patients: Patient[]; examinations: Examination[] }) => { added: number };
+  importAppointments: (payload: { patients: Patient[]; examinations: Examination[] }) => { added: number; addedExams: number; skipped: number };
 
   setSelectedExam: (id: string) => void;
   updateExamField: <K extends keyof Examination>(examId: string, field: K, value: Examination[K]) => void;
@@ -75,6 +98,9 @@ interface AppState {
   removeLesion: (lesionId: string) => void;
   registerBiopsy: (lesionId: string, biopsy: Lesion['biopsy']) => void;
 
+  getReportByExamId: (examId: string) => Report | undefined;
+  getCurrentReport: () => Report | undefined;
+  touchReport: (examId: string) => void;
   generateFindings: () => void;
   updateReportField: <K extends keyof Report>(field: K, value: Report[K]) => void;
   checkCompleteness: () => void;
@@ -119,14 +145,14 @@ function persistState(state: AppState) {
 const stored = hydrateFromStorage();
 
 export const useAppStore = create<AppState>((set, get) => {
-  const initialReport = (stored.report as Report) || { ...mockReport };
+  const initialReports: Report[] = Array.isArray(stored.reports) ? (stored.reports as Report[]) : mockReports;
   return {
     currentPatientId: (stored.currentPatientId as string) || 'P001',
     patients: (stored.patients as Patient[]) || mockPatients,
     examinations: (stored.examinations as Examination[]) || mockExaminations,
     images: (stored.images as ImageItem[]) || mockImages,
     lesions: (stored.lesions as Lesion[]) || mockLesions,
-    report: initialReport,
+    reports: initialReports,
     followups: (stored.followups as Followup[]) || mockFollowups,
     selectedExamId: (stored.selectedExamId as string) || 'E001',
     selectedImageId: (stored.selectedImageId as string) || 'IMG001',
@@ -146,7 +172,6 @@ export const useAppStore = create<AppState>((set, get) => {
         if (firstImg) set({ selectedImageId: firstImg.id });
         const firstLesion = state.lesions.find((l) => l.examId === exam.id);
         if (firstLesion) set({ selectedLesionId: firstLesion.id });
-        set({ report: { ...mockReport, examId: exam.id } });
       }
       persistState(get());
     },
@@ -161,12 +186,18 @@ export const useAppStore = create<AppState>((set, get) => {
       const dedupPatients = newPatients.filter((p) => !existingIds.has(p.id));
       const existingExamIds = new Set(s.examinations.map((e) => e.id));
       const dedupExams = newExams.filter((e) => !existingExamIds.has(e.id));
+      const newReports = dedupExams.map((e) => emptyReportForExam(e.id));
       set({
         patients: [...s.patients, ...dedupPatients],
         examinations: [...s.examinations, ...dedupExams],
+        reports: [...s.reports, ...newReports],
       });
       persistState(get());
-      return { added: dedupPatients.length };
+      return {
+        added: dedupPatients.length,
+        addedExams: dedupExams.length,
+        skipped: newPatients.length - dedupPatients.length,
+      };
     },
 
     setSelectedExam: (id) => {
@@ -290,24 +321,55 @@ export const useAppStore = create<AppState>((set, get) => {
       persistState(get());
     },
 
+    getReportByExamId: (examId) => {
+      const s = get();
+      let r = s.reports.find((r) => r.examId === examId);
+      if (!r) {
+        r = emptyReportForExam(examId);
+        set({ reports: [...s.reports, r] });
+        persistState(get());
+      }
+      return r;
+    },
+    getCurrentReport: () => get().getReportByExamId(get().selectedExamId),
+    touchReport: (examId) => {
+      set((s) => ({
+        reports: s.reports.map((r) =>
+          r.examId === examId ? { ...r, lastEditedAt: nowStamp() } : r,
+        ),
+      }));
+    },
+
     generateFindings: () => {
       const state = get();
       const exam = state.getCurrentExam();
       if (!exam) return;
+      state.getReportByExamId(exam.id);
       const lesions = state.getExamLesions();
       const allAnnotations: Annotation[] = [];
       state.images.forEach((img) => {
         img.annotations.forEach((a) => allAnnotations.push({ ...a, imageLocation: img.location } as any));
       });
       const findings = generateStructuredFindings(exam, lesions, allAnnotations);
-      const updated = { ...state.report, structuredFindings: findings, examId: exam.id };
-      const { score, missingFields } = checkReportCompleteness(exam, lesions, updated);
-      set({ report: { ...updated, completenessScore: score, missingFields } });
+      set((s) => ({
+        reports: s.reports.map((r) => {
+          if (r.examId !== exam.id) return r;
+          const updated = { ...r, structuredFindings: findings, examId: exam.id };
+          const { score, missingFields } = checkReportCompleteness(exam, lesions, updated);
+          return { ...updated, completenessScore: score, missingFields, lastEditedAt: nowStamp() };
+        }),
+      }));
       persistState(get());
     },
 
     updateReportField: (field, value) => {
-      set((s) => ({ report: { ...s.report, [field]: value } }));
+      const examId = get().selectedExamId;
+      get().getReportByExamId(examId);
+      set((s) => ({
+        reports: s.reports.map((r) =>
+          r.examId === examId ? { ...r, [field]: value, lastEditedAt: nowStamp() } : r,
+        ),
+      }));
       persistState(get());
       setTimeout(() => get().checkCompleteness(), 0);
     },
@@ -316,15 +378,25 @@ export const useAppStore = create<AppState>((set, get) => {
       const state = get();
       const exam = state.getCurrentExam();
       if (!exam) return;
+      const report = state.getCurrentReport() || emptyReportForExam(exam.id);
       const lesions = state.getExamLesions();
-      const { score, missingFields } = checkReportCompleteness(exam, lesions, state.report);
-      set((s) => ({ report: { ...s.report, completenessScore: score, missingFields } }));
+      const { score, missingFields } = checkReportCompleteness(exam, lesions, report);
+      set((s) => ({
+        reports: s.reports.map((r) =>
+          r.examId === exam.id ? { ...r, completenessScore: score, missingFields } : r,
+        ),
+      }));
       persistState(get());
     },
 
     signReport: (doctorName) => {
+      const examId = get().selectedExamId;
       set((s) => ({
-        report: { ...s.report, doctorSignature: doctorName, signedAt: new Date().toISOString() },
+        reports: s.reports.map((r) =>
+          r.examId === examId
+            ? { ...r, doctorSignature: doctorName, signedAt: new Date().toISOString(), lastEditedAt: nowStamp() }
+            : r,
+        ),
         examinations: s.examinations.map((e) =>
           e.id === s.selectedExamId ? { ...e, status: 'signed' } : e,
         ),

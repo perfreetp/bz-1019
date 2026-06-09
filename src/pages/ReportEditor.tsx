@@ -16,10 +16,14 @@ import {
   X,
   Copy,
   PenLine,
+  Clock,
+  ListChecks,
+  CheckCircle2,
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { termLibrary, searchTerms, type TermItem, type TermCategory } from '@/utils/termLibrary';
 import { exportPatientSummary, downloadText } from '@/utils/storage';
+import type { Report } from '@/types';
 
 type InsertTarget = 'findings' | 'diagnosis' | 'recommendations' | 'conclusion';
 
@@ -78,21 +82,34 @@ function CircularProgress({ value, size = 44, strokeWidth = 5 }: CircularProgres
 }
 
 export default function ReportEditor() {
-  const {
-    report,
-    generateFindings,
-    updateReportField,
-    checkCompleteness,
-    signReport,
-    getCurrentPatient,
-    getCurrentExam,
-  } = useAppStore();
+  const reports = useAppStore((s) => s.reports);
+  const generateFindings = useAppStore((s) => s.generateFindings);
+  const updateReportField = useAppStore((s) => s.updateReportField);
+  const checkCompleteness = useAppStore((s) => s.checkCompleteness);
+  const signReport = useAppStore((s) => s.signReport);
+  const getCurrentPatient = useAppStore((s) => s.getCurrentPatient);
+  const getCurrentExam = useAppStore((s) => s.getCurrentExam);
+  const getCurrentReport = useAppStore((s) => s.getCurrentReport);
+  const selectedExamId = useAppStore((s) => s.selectedExamId);
+  const currentPatientId = useAppStore((s) => s.currentPatientId);
 
   const checkCompletenessRef = useRef(checkCompleteness);
   checkCompletenessRef.current = checkCompleteness;
 
   const patient = getCurrentPatient();
   const exam = getCurrentExam();
+  const report = getCurrentReport() || {
+    id: '', examId: selectedExamId,
+    structuredFindings: '', insertedTerms: [], diagnosis: '', recommendations: '', conclusion: '',
+    doctorSignature: '', signedAt: '', completenessScore: 0, missingFields: [], lastEditedAt: '',
+  } as Report;
+
+  const patientReports = useMemo(() => {
+    if (!patient) return [];
+    const patientExamIds = new Set<string>();
+    useAppStore.getState().examinations.filter(e => e.patientId === currentPatientId).forEach(e => patientExamIds.add(e.id));
+    return reports.filter(r => patientExamIds.has(r.examId) || false);
+  }, [reports, currentPatientId, patient]);
 
   const [searchKeyword, setSearchKeyword] = useState('');
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>(
@@ -470,7 +487,42 @@ export default function ReportEditor() {
         </div>
 
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="shrink-0 px-6 py-4 bg-white border-b border-slate-200 flex items-center gap-3">
+          <div className="shrink-0 px-6 py-4 bg-white border-b border-slate-200">
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200">
+                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-xs text-slate-600">
+                  最近编辑：
+                  <span className="font-semibold text-slate-800 ml-1">
+                    {report.lastEditedAt || '尚未开始编辑'}
+                  </span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-100">
+                <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />
+                <span className="text-xs text-blue-700">
+                  报告 ID：<span className="font-mono font-semibold ml-1">{report.id || '--'}</span>
+                </span>
+              </div>
+              {report.doctorSignature && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200">
+                  <PenLine className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="text-xs text-emerald-700">
+                    已签发 · <span className="font-semibold ml-0.5">{report.doctorSignature}</span>
+                  </span>
+                </div>
+              )}
+              {patientReports.length > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-violet-50 border border-violet-200">
+                  <ListChecks className="w-3.5 h-3.5 text-violet-500" />
+                  <span className="text-xs text-violet-700">
+                    本患者报告：<span className="font-semibold ml-0.5">{patientReports.length} 份</span>
+                  </span>
+                </div>
+              )}
+              <div className="flex-1" />
+            </div>
+            <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={generateFindings}
@@ -516,6 +568,7 @@ export default function ReportEditor() {
                 {report.doctorSignature ? '已签发' : '签发报告'}
               </span>
             </button>
+          </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-5">

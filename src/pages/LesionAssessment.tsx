@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus,
   Trash2,
@@ -16,6 +17,7 @@ import {
   ArrowRight,
   Image as ImageIcon,
   AlertCircle,
+  Link2,
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import type { Lesion, Biopsy } from '@/types';
@@ -67,9 +69,9 @@ function FormLabel({ label, required }: FormLabelProps) {
 }
 
 export default function LesionAssessment() {
-  const examLesions = useAppStore((s) => s.getExamLesions());
-  const examImages = useAppStore((s) => s.getExamImages());
   const selectedExamId = useAppStore((s) => s.selectedExamId);
+  const allImages = useAppStore((s) => s.images);
+  const allLesions = useAppStore((s) => s.lesions);
   const selectedLesionId = useAppStore((s) => s.selectedLesionId);
   const setSelectedLesion = useAppStore((s) => s.setSelectedLesion);
   const addLesion = useAppStore((s) => s.addLesion);
@@ -77,9 +79,44 @@ export default function LesionAssessment() {
   const removeLesion = useAppStore((s) => s.removeLesion);
   const registerBiopsy = useAppStore((s) => s.registerBiopsy);
 
+  const navigate = useNavigate();
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
 
+  const examImages = useMemo(
+    () => allImages.filter((img) => img.examId === selectedExamId),
+    [allImages, selectedExamId]
+  );
+
+  const examLesions = useMemo(
+    () => allLesions.filter((l) => l.examId === selectedExamId),
+    [allLesions, selectedExamId]
+  );
+
+  const annotationMap = useMemo(() => {
+    const m: Record<string, import('@/types').Annotation[]> = {};
+    allImages.forEach((img) => { m[img.id] = img.annotations || []; });
+    return m;
+  }, [allImages]);
+
   const currentLesion = examLesions.find((l) => l.id === selectedLesionId);
+
+  const lesionAnnotationMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    examLesions.forEach((lesion) => {
+      let count = 0;
+      examImages.forEach((img) => {
+        const anns = annotationMap[img.id] || [];
+        count += anns.filter((a) => a.lesionId === lesion.id).length;
+      });
+      map[lesion.id] = count;
+    });
+    return map;
+  }, [examLesions, examImages, annotationMap]);
+
+  const totalExamAnnotations = useMemo(
+    () => examImages.reduce((acc, img) => acc + (annotationMap[img.id]?.length || 0), 0),
+    [examImages, annotationMap]
+  );
 
   const diagnosisHints = useMemo(() => {
     if (!currentLesion) return [];
@@ -239,56 +276,84 @@ export default function LesionAssessment() {
     <div className="min-h-screen bg-slate-50">
       <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-[1400px] mx-auto px-6 py-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            {examLesions.map((lesion, idx) => {
-              const isActive = lesion.id === selectedLesionId;
-              return (
-                <div key={lesion.id} className="relative group">
-                  <button
-                    onClick={() => setSelectedLesion(lesion.id)}
-                    className={`relative inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
-                      isActive
-                        ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white border-transparent shadow-sm shadow-blue-500/20'
-                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <span
-                      className={`w-5 h-5 rounded-md text-xs flex items-center justify-center font-bold ${
-                        isActive
-                          ? 'bg-white/20 text-white'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {idx + 1}
-                    </span>
-                    <span className="max-w-[140px] truncate">
-                      {lesion.location || `病灶${idx + 1}`}
-                    </span>
-                  </button>
-                  {examLesions.length > 1 && (
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              {examLesions.map((lesion, idx) => {
+                const isActive = lesion.id === selectedLesionId;
+                const annCount = lesionAnnotationMap[lesion.id] ?? 0;
+                return (
+                  <div key={lesion.id} className="relative group">
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeLesion(lesion.id);
-                      }}
-                      className={`absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100 ${
+                      onClick={() => setSelectedLesion(lesion.id)}
+                      className={`relative inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
                         isActive
-                          ? 'bg-white text-rose-600 shadow'
-                          : 'bg-slate-200 text-slate-600 hover:bg-rose-100 hover:text-rose-600'
+                          ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white border-transparent shadow-sm shadow-blue-500/20'
+                          : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                       }`}
                     >
-                      <X className="w-3 h-3" />
+                      <span
+                        className={`w-5 h-5 rounded-md text-xs flex items-center justify-center font-bold ${
+                          isActive
+                            ? 'bg-white/20 text-white'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {idx + 1}
+                      </span>
+                      <span className="max-w-[140px] truncate">
+                        {lesion.location || `病灶${idx + 1}`}
+                      </span>
+                      {annCount > 0 && (
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded-md flex items-center gap-0.5 font-semibold ${
+                            isActive
+                              ? 'bg-white/25 text-white'
+                              : 'bg-violet-100 text-violet-700'
+                          }`}
+                        >
+                          <Link2 className="w-2.5 h-2.5" />
+                          {annCount}
+                        </span>
+                      )}
                     </button>
-                  )}
-                </div>
-              );
-            })}
+                    {examLesions.length > 1 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeLesion(lesion.id);
+                        }}
+                        className={`absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100 ${
+                          isActive
+                            ? 'bg-white text-rose-600 shadow'
+                            : 'bg-slate-200 text-slate-600 hover:bg-rose-100 hover:text-rose-600'
+                        }`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              <button
+                onClick={handleAddLesion}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 transition-all"
+              >
+                <Plus className="w-4 h-4" />
+                新增病灶
+              </button>
+            </div>
+
             <button
-              onClick={handleAddLesion}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 transition-all"
+              onClick={() => navigate(`/annotation/${selectedExamId}`)}
+              className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 transition-all"
             >
-              <Plus className="w-4 h-4" />
-              新增病灶
+              <Link2 className="w-4 h-4" />
+              影像标注
+              {totalExamAnnotations > 0 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-violet-200 text-violet-800 font-semibold">
+                  {totalExamAnnotations} 条
+                </span>
+              )}
             </button>
           </div>
         </div>

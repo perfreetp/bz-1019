@@ -26,6 +26,7 @@ import {
   X,
   CheckCircle2,
   Info,
+  Upload,
 } from 'lucide-react';
 
 const statusMap = {
@@ -96,6 +97,8 @@ function parseCSV(csv: string): { patients: Patient[]; examinations: Examination
       consumables: [],
       contraindications: [],
       status: 'pending',
+      preoperativeMedication: row.preoperativeMedication || '',
+      processNotes: row.processNotes || '',
     };
     examinations.push(exam);
   }
@@ -162,6 +165,14 @@ export default function PatientOverview() {
   const [patientDropdownOpen, setPatientDropdownOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
 
+  const [importPreview, setImportPreview] = useState<{
+    newPatients: Patient[];
+    newExams: Examination[];
+    skippedPatients: Patient[];
+    skippedExams: Examination[];
+    parsed: { patients: Patient[]; examinations: Examination[] };
+  } | null>(null);
+
   const patient = getCurrentPatient();
   const currentExam = examinations.find((e) => e.patientId === currentPatientId);
   const today = '2026-06-09';
@@ -195,20 +206,13 @@ export default function PatientOverview() {
         if (!parsed.patients || parsed.patients.length === 0) {
           throw new Error('未解析到任何有效患者记录');
         }
-        const { added } = importAppointments(parsed);
-        const total = parsed.patients.length;
-        const examCount = parsed.examinations.length;
-        if (added === 0 && total > 0) {
-          setImportNotification({
-            type: 'info',
-            message: `共 ${total} 条患者记录已存在，已自动跳过。请检查患者 ID 是否重复。`,
-          });
-        } else {
-          setImportNotification({
-            type: 'success',
-            message: `导入成功！已新增 ${added} 位患者${examCount ? `、${examCount} 条检查安排` : ''}，${total - added > 0 ? `${total - added} 条重复已跳过。` : '患者下拉和今日日程已更新。'}`,
-          });
-        }
+        const existingPatientIds = new Set(patients.map((p) => p.id));
+        const existingExamIds = new Set(examinations.map((e) => e.id));
+        const newPatients = parsed.patients.filter((p) => !existingPatientIds.has(p.id));
+        const skippedPatients = parsed.patients.filter((p) => existingPatientIds.has(p.id));
+        const newExams = parsed.examinations.filter((e) => !existingExamIds.has(e.id));
+        const skippedExams = parsed.examinations.filter((e) => existingExamIds.has(e.id));
+        setImportPreview({ newPatients, newExams, skippedPatients, skippedExams, parsed });
       } catch (err: any) {
         console.error('[Import error]', err);
         setImportNotification({
@@ -218,6 +222,26 @@ export default function PatientOverview() {
       }
     };
     fileInput.click();
+  };
+
+  const confirmImport = () => {
+    if (!importPreview) return;
+    const { parsed, newPatients, newExams } = importPreview;
+    const { added } = importAppointments(parsed);
+    const total = parsed.patients.length;
+    const examCount = parsed.examinations.length;
+    if (added === 0 && total > 0) {
+      setImportNotification({
+        type: 'info',
+        message: `共 ${total} 条患者记录已存在，已自动跳过。请检查患者 ID 是否重复。`,
+      });
+    } else {
+      setImportNotification({
+        type: 'success',
+        message: `导入成功！已新增 ${added} 位患者${examCount ? `、${newExams.length} 条检查安排` : ''}，${total - added > 0 ? `${total - added} 条重复已跳过。` : '患者下拉和今日日程已更新。'}`,
+      });
+    }
+    setImportPreview(null);
   };
 
   return (
@@ -698,6 +722,218 @@ export default function PatientOverview() {
           </div>
         )}
       </div>
+
+      {importPreview && (() => {
+        const { newPatients, newExams, skippedPatients, skippedExams } = importPreview;
+        const totalP = newPatients.length + skippedPatients.length;
+        const totalE = newExams.length + skippedExams.length;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+            <div className="w-[720px] max-w-full max-h-[90vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-[fadeIn_.15s_ease-out]">
+              <div className="px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-blue-50 to-cyan-50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+                      <Upload className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-800">导入预约预览</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        共解析 {totalP} 位患者 · {totalE} 条检查安排，请确认后导入
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setImportPreview(null)}
+                    className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:bg-white hover:text-slate-700 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="mt-4 grid grid-cols-4 gap-3">
+                  <div className="bg-white rounded-xl p-3 border border-slate-200">
+                    <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">新增患者</div>
+                    <div className="text-xl font-bold text-blue-600">{newPatients.length}</div>
+                    <div className="text-[10px] text-slate-400">patient ID 均为新</div>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 border border-slate-200">
+                    <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">新增检查</div>
+                    <div className="text-xl font-bold text-cyan-600">{newExams.length}</div>
+                    <div className="text-[10px] text-slate-400">exam ID 均为新</div>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 border border-slate-200">
+                    <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">重复跳过</div>
+                    <div className="text-xl font-bold text-amber-500">
+                      {skippedPatients.length + skippedExams.length}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {skippedPatients.length}人/{skippedExams.length}条
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 border border-slate-200">
+                    <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1">将导入</div>
+                    <div className="text-xl font-bold text-emerald-600">
+                      {newPatients.length + newExams.length}
+                    </div>
+                    <div className="text-[10px] text-slate-400">条记录总数量</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 space-y-5">
+                {newPatients.length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-blue-500" />
+                      新增患者（{newPatients.length}）
+                    </h4>
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="max-h-[140px] overflow-y-auto divide-y divide-slate-100">
+                        {newPatients.map((p) => (
+                          <div key={p.id} className="flex items-center gap-3 px-4 py-2.5 bg-emerald-50/50">
+                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-400 to-cyan-400 flex items-center justify-center text-white text-xs font-bold shrink-0">
+                              {p.name.charAt(0)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-semibold text-slate-800 truncate">
+                                {p.name}
+                                <span className="ml-2 text-[11px] font-normal text-slate-500">
+                                  {p.gender} · {p.age}岁
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-500 font-mono">{p.id}</div>
+                            </div>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold shrink-0">
+                              新增
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {newExams.length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-cyan-500" />
+                      新增检查安排（{newExams.length}）
+                    </h4>
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="max-h-[160px] overflow-y-auto divide-y divide-slate-100">
+                        {newExams.map((e) => {
+                          const p = patients.find((pt) => pt.id === e.patientId) || newPatients.find((pt) => pt.id === e.patientId);
+                          return (
+                            <div key={e.id} className="flex items-center gap-3 px-4 py-2.5 bg-cyan-50/40">
+                              <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-600 flex items-center justify-center font-mono text-[10px] font-bold shrink-0">
+                                {e.id.slice(-3)}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-semibold text-slate-800 truncate">
+                                  {e.type}
+                                  <span className="ml-2 text-[11px] font-normal text-slate-500">
+                                    {e.examDate} · {e.room}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                                  <span className="font-mono">{e.id}</span>
+                                  {p && <span>· 患者：{p.name}</span>}
+                                </div>
+                              </div>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-700 font-semibold shrink-0">
+                                新增
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {skippedPatients.length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      跳过 · 重复患者（{skippedPatients.length}）
+                    </h4>
+                    <div className="border border-slate-200 border-dashed rounded-xl overflow-hidden">
+                      <div className="max-h-[100px] overflow-y-auto divide-y divide-slate-100">
+                        {skippedPatients.map((p) => (
+                          <div key={p.id} className="flex items-center gap-3 px-4 py-2 bg-slate-50/70">
+                            <div className="w-7 h-7 rounded-md bg-slate-200 flex items-center justify-center text-slate-500 text-xs font-bold shrink-0">
+                              {p.name.charAt(0)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-medium text-slate-600 truncate">
+                                {p.name}
+                                <span className="ml-2 text-[10px] text-slate-400">
+                                  {p.gender} · {p.age}岁
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono">{p.id}</div>
+                            </div>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 shrink-0">
+                              已存在，跳过
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {skippedExams.length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      跳过 · 重复检查（{skippedExams.length}）
+                    </h4>
+                    <div className="border border-slate-200 border-dashed rounded-xl overflow-hidden">
+                      <div className="max-h-[100px] overflow-y-auto divide-y divide-slate-100">
+                        {skippedExams.map((e) => (
+                          <div key={e.id} className="flex items-center gap-3 px-4 py-2 bg-slate-50/70">
+                            <div className="w-7 h-7 rounded-md bg-slate-200 text-slate-500 flex items-center justify-center font-mono text-[10px] shrink-0">
+                              {e.id.slice(-3)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-medium text-slate-600 truncate">
+                                {e.type} · {e.examDate}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono">{e.id}</div>
+                            </div>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 shrink-0">
+                              已存在，跳过
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setImportPreview(null)}
+                  className="px-5 py-2.5 rounded-xl text-sm font-medium text-slate-600 bg-white border border-slate-300 hover:bg-slate-50 transition-all"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={confirmImport}
+                  disabled={newPatients.length === 0 && newExams.length === 0}
+                  className="px-6 py-2.5 rounded-xl text-sm font-semibold text-white bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 shadow-sm shadow-blue-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  确认导入
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

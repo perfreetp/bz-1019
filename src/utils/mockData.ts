@@ -107,6 +107,8 @@ export const mockExaminations: Examination[] = [
     ],
     contraindications: [],
     status: 'in_progress',
+    preoperativeMedication: '地西泮5mg肌注，东莨菪碱0.3mg肌注',
+    processNotes: '术中胃镜见胃角溃疡及胃体后壁凹陷性病变，分别活检；肠镜顺利到达回盲部，乙状结肠及横结肠见息肉样病变，分别处理。过程平稳，麻醉苏醒良好，未出现并发症。',
   },
   {
     id: 'E002',
@@ -131,6 +133,8 @@ export const mockExaminations: Examination[] = [
     ],
     contraindications: [],
     status: 'pending',
+    preoperativeMedication: '',
+    processNotes: '',
   },
   {
     id: 'E003',
@@ -152,6 +156,8 @@ export const mockExaminations: Examination[] = [
     consumables: [],
     contraindications: [],
     status: 'pending',
+    preoperativeMedication: '',
+    processNotes: '',
   },
 ];
 
@@ -380,19 +386,50 @@ export const mockLesions: Lesion[] = [
   },
 ];
 
-export const mockReport: Report = {
-  id: 'R001',
-  examId: 'E001',
-  structuredFindings: '',
-  insertedTerms: [],
-  diagnosis: '',
-  recommendations: '',
-  conclusion: '',
-  doctorSignature: '',
-  signedAt: '',
-  completenessScore: 0,
-  missingFields: [],
-};
+export const mockReports: Report[] = [
+  {
+    id: 'R001',
+    examId: 'E001',
+    structuredFindings: '',
+    insertedTerms: [],
+    diagnosis: '',
+    recommendations: '',
+    conclusion: '',
+    doctorSignature: '',
+    signedAt: '',
+    completenessScore: 0,
+    missingFields: [],
+    lastEditedAt: '2026-06-09 09:35',
+  },
+  {
+    id: 'R002',
+    examId: 'E002',
+    structuredFindings: '',
+    insertedTerms: [],
+    diagnosis: '',
+    recommendations: '',
+    conclusion: '',
+    doctorSignature: '',
+    signedAt: '',
+    completenessScore: 0,
+    missingFields: [],
+    lastEditedAt: '2026-06-09 10:40',
+  },
+  {
+    id: 'R003',
+    examId: 'E003',
+    structuredFindings: '',
+    insertedTerms: [],
+    diagnosis: '',
+    recommendations: '',
+    conclusion: '',
+    doctorSignature: '',
+    signedAt: '',
+    completenessScore: 0,
+    missingFields: [],
+    lastEditedAt: '',
+  },
+];
 
 export const mockFollowups: Followup[] = [
   {

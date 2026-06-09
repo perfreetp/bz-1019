@@ -55,6 +55,8 @@ export interface Examination {
   consumables: Consumable[];
   contraindications: string[];
   status: 'pending' | 'in_progress' | 'completed' | 'signed';
+  preoperativeMedication: string;
+  processNotes: string;
 }
 
 export type AnnotationType = 'rect' | 'circle' | 'freehand' | 'arrow' | 'text';
@@ -74,6 +76,7 @@ export interface Annotation {
   };
   color: string;
   note: string;
+  lesionId?: string;
 }
 
 export interface ImageItem {
@@ -120,6 +123,7 @@ export interface Report {
   signedAt: string;
   completenessScore: number;
   missingFields: string[];
+  lastEditedAt: string;
 }
 
 export interface Followup {

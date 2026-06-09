@@ -221,7 +221,7 @@ function ChartCard({
 }
 
 export default function QualityDashboard() {
-  const { followups, examinations, report } = useAppStore();
+  const { followups, examinations } = useAppStore();
 
   const kpiSummary = useMemo(() => {
     const signedCount = examinations.filter((e) => e.status === 'signed').length;

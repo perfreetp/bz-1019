@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '@/store';
-import type { Annotation } from '@/types';
+import type { Annotation, Lesion } from '@/types';
 import {
   MousePointer2,
   Square,
@@ -19,6 +20,10 @@ import {
   MapPin,
   StickyNote,
   FolderTree,
+  Link2,
+  PlusCircle,
+  X,
+  Sparkles,
 } from 'lucide-react';
 
 const anatomyGroups = [
@@ -77,18 +82,47 @@ type DrawState =
   | { mode: 'freehand'; points: { x: number; y: number }[] };
 
 export default function ImageAnnotation() {
-  const {
-    getExamImages,
-    selectedImageId,
-    setSelectedImage,
-    currentTool,
-    setCurrentTool,
-    currentAnnotationColor,
-    setAnnotationColor,
-    addAnnotation,
-    removeAnnotation,
-    getImageAnnotations,
-  } = useAppStore();
+  const selectedExamId = useAppStore((s) => s.selectedExamId);
+  const allImages = useAppStore((s) => s.images);
+  const allLesions = useAppStore((s) => s.lesions);
+  const selectedImageId = useAppStore((s) => s.selectedImageId);
+  const setSelectedImage = useAppStore((s) => s.setSelectedImage);
+  const currentTool = useAppStore((s) => s.currentTool);
+  const setCurrentTool = useAppStore((s) => s.setCurrentTool);
+  const currentAnnotationColor = useAppStore((s) => s.currentAnnotationColor);
+  const setAnnotationColor = useAppStore((s) => s.setAnnotationColor);
+  const addAnnotation = useAppStore((s) => s.addAnnotation);
+  const removeAnnotation = useAppStore((s) => s.removeAnnotation);
+  const updateAnnotation = useAppStore((s) => s.updateAnnotation);
+  const addLesion = useAppStore((s) => s.addLesion);
+  const setSelectedLesion = useAppStore((s) => s.setSelectedLesion);
+  const getCurrentExam = useAppStore((s) => s.getCurrentExam);
+
+  const navigate = useNavigate();
+  const exam = getCurrentExam();
+
+  const examImages = useMemo(
+    () => allImages.filter((img) => img.examId === selectedExamId),
+    [allImages, selectedExamId]
+  );
+
+  const examLesions = useMemo(
+    () => allLesions.filter((l) => l.examId === selectedExamId),
+    [allLesions, selectedExamId]
+  );
+
+  const annotationMap = useMemo(() => {
+    const m: Record<string, Annotation[]> = {};
+    allImages.forEach((img) => { m[img.id] = img.annotations || []; });
+    return m;
+  }, [allImages]);
+
+  const currentAnnotations = useMemo(
+    () => (selectedImageId ? annotationMap[selectedImageId] || [] : []),
+    [annotationMap, selectedImageId]
+  );
+
+  const [linkingAnnotation, setLinkingAnnotation] = useState<Annotation | null>(null);
 
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     食管: true,
@@ -110,12 +144,11 @@ export default function ImageAnnotation() {
   const redoStackRef = useRef<Annotation[][]>([]);
   const [, forceRender] = useState(0);
 
-  const allImages = getExamImages();
-  const selectedImage = allImages.find((img) => img.id === selectedImageId);
+  const selectedImage = examImages.find((img) => img.id === selectedImageId);
 
   const getLocationImageCount = useMemo(() => {
     const countMap: Record<string, number> = {};
-    allImages.forEach((img) => {
+    examImages.forEach((img) => {
       for (const group of anatomyGroups) {
         for (const child of group.children) {
           if (img.location.includes(child) || img.location.includes(group.name)) {
@@ -127,16 +160,14 @@ export default function ImageAnnotation() {
       }
     });
     return countMap;
-  }, [allImages]);
+  }, [examImages]);
 
   const filteredImages = useMemo(() => {
-    if (!selectedLocation) return allImages;
-    return allImages.filter(
+    if (!selectedLocation) return examImages;
+    return examImages.filter(
       (img) => img.location.includes(selectedLocation) || selectedLocation.includes(img.location.split(/[（(]/)[0]),
     );
-  }, [allImages, selectedLocation]);
-
-  const currentAnnotations = selectedImage ? getImageAnnotations(selectedImage.id) : [];
+  }, [examImages, selectedLocation]);
 
   const toggleGroup = (groupName: string) => {
     setExpandedGroups((prev) => ({ ...prev, [groupName]: !prev[groupName] }));
@@ -274,7 +305,7 @@ export default function ImageAnnotation() {
 
   const pushUndo = () => {
     if (!selectedImageId) return;
-    undoStackRef.current.push([...getImageAnnotations(selectedImageId)]);
+    undoStackRef.current.push([...(annotationMap[selectedImageId] || [])]);
     redoStackRef.current = [];
     forceRender((n) => n + 1);
   };
@@ -283,8 +314,8 @@ export default function ImageAnnotation() {
     if (!selectedImageId) return;
     const prev = undoStackRef.current.pop();
     if (!prev) return;
-    redoStackRef.current.push([...getImageAnnotations(selectedImageId)]);
-    const current = getImageAnnotations(selectedImageId);
+    redoStackRef.current.push([...(annotationMap[selectedImageId] || [])]);
+    const current = annotationMap[selectedImageId] || [];
     const toRemove = current.filter((a) => !prev.find((p) => p.id === a.id));
     toRemove.forEach((a) => removeAnnotation(selectedImageId, a.id));
     const toAdd = prev.filter((a) => !current.find((c) => c.id === a.id));
@@ -296,8 +327,8 @@ export default function ImageAnnotation() {
     if (!selectedImageId) return;
     const next = redoStackRef.current.pop();
     if (!next) return;
-    undoStackRef.current.push([...getImageAnnotations(selectedImageId)]);
-    const current = getImageAnnotations(selectedImageId);
+    undoStackRef.current.push([...(annotationMap[selectedImageId] || [])]);
+    const current = annotationMap[selectedImageId] || [];
     const toRemove = current.filter((a) => !next.find((p) => p.id === a.id));
     toRemove.forEach((a) => removeAnnotation(selectedImageId, a.id));
     const toAdd = next.filter((a) => !current.find((c) => c.id === a.id));
@@ -413,6 +444,36 @@ export default function ImageAnnotation() {
       pushUndo();
       removeAnnotation(selectedImage.id, hit.id);
     }
+  };
+
+  const linkAnnotationToLesion = (annotationId: string, lesionId: string) => {
+    selectedImageId && updateAnnotation(selectedImageId, annotationId, { lesionId });
+    setLinkingAnnotation(null);
+  };
+
+  const createAndLinkNewLesion = (annotationId: string) => {
+    if (!selectedImage || !exam) return;
+    const idx = examLesions.length + 1;
+    const newLesion: Lesion = {
+      id: `L${Date.now()}`,
+      examId: exam.id,
+      location: selectedImage.location,
+      sizeMajor: 0,
+      sizeMinor: 0,
+      morphology: '',
+      surfaceFeature: '',
+      forrestGrade: '',
+      activeBleeding: false,
+      preliminaryDiagnosis: [],
+      notes: '',
+      imageIds: [selectedImage.id],
+      biopsy: null,
+    };
+    addLesion(newLesion);
+    selectedImageId && updateAnnotation(selectedImageId, annotationId, { lesionId: newLesion.id });
+    setSelectedLesion(newLesion.id);
+    setLinkingAnnotation(null);
+    navigate(`/lesion/${exam.id}`);
   };
 
   return (
@@ -765,15 +826,48 @@ export default function ImageAnnotation() {
                           <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
                           <span className="truncate">{selectedImage?.location}</span>
                         </div>
+                        {annotation.lesionId && (() => {
+                          const lesion = examLesions.find((l) => l.id === annotation.lesionId);
+                          if (!lesion) return null;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => lesion && navigate(`/lesion/${exam?.id}`)}
+                              className="w-full text-[11px] mb-1.5 text-left px-2 py-1.5 rounded-md bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100 transition-colors flex items-center gap-1.5"
+                            >
+                              <Link2 className="w-3 h-3 shrink-0" />
+                              <span className="truncate">
+                                已关联：{lesion.location}
+                              </span>
+                            </button>
+                          );
+                        })()}
                         {annotation.note && (
                           <div className="text-[11px] text-slate-500 bg-slate-50 rounded-md px-2 py-1.5 leading-relaxed">
                             {annotation.note}
                           </div>
                         )}
+                        {!annotation.lesionId && (
+                          <button
+                            type="button"
+                            onClick={() => setLinkingAnnotation(annotation)}
+                            className="mt-1.5 w-full text-[11px] px-2 py-1.5 rounded-md bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 transition-colors flex items-center gap-1.5"
+                          >
+                            <Link2 className="w-3 h-3 shrink-0" />
+                            关联病灶
+                          </button>
+                        )}
                       </div>
 
                       {isHovered && (
                         <div className="absolute top-2 right-2 flex items-center gap-1 bg-white rounded-lg shadow-md border border-slate-200 p-0.5">
+                          <button
+                            onClick={() => setLinkingAnnotation(annotation)}
+                            className="w-7 h-7 rounded-md flex items-center justify-center text-slate-500 hover:bg-violet-50 hover:text-violet-600 transition-colors"
+                            title="关联病灶"
+                          >
+                            <Link2 className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             className="w-7 h-7 rounded-md flex items-center justify-center text-slate-500 hover:bg-blue-50 hover:text-blue-600 transition-colors"
                             title="编辑"
@@ -828,6 +922,86 @@ export default function ImageAnnotation() {
           )}
         </div>
       </aside>
+
+      {linkingAnnotation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="w-[440px] max-w-[90vw] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-[fadeIn_.15s_ease-out]">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-violet-50 to-purple-50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-purple-500 flex items-center justify-center">
+                  <Link2 className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-800">关联到病灶</div>
+                  <div className="text-[11px] text-slate-500">
+                    选择已有病灶或新建病灶关联此标注
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setLinkingAnnotation(null)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-white hover:text-slate-700 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 max-h-[420px] overflow-y-auto">
+              {examLesions.length > 0 ? (
+                <div className="space-y-2 mb-4">
+                  <div className="text-[11px] font-semibold text-slate-500 px-1 mb-2 uppercase tracking-wider">
+                    已有病灶（{examLesions.length}）
+                  </div>
+                  {examLesions.map((lesion, i) => {
+                    const linkCount = examImages.reduce(
+                      (acc, img) =>
+                        acc + (annotationMap[img.id] || []).filter((a) => a.lesionId === lesion.id).length,
+                      0,
+                    );
+                    return (
+                      <button
+                        key={lesion.id}
+                        onClick={() => linkAnnotationToLesion(linkingAnnotation.id, lesion.id)}
+                        className="w-full text-left group flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-violet-400 hover:bg-violet-50/50 transition-all"
+                      >
+                        <div className="w-9 h-9 rounded-lg bg-rose-100 flex items-center justify-center shrink-0 text-rose-600 font-bold text-sm">
+                          {i + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-slate-800 truncate group-hover:text-violet-700">
+                            {lesion.location}
+                          </div>
+                          <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                            <span className="font-mono">{lesion.id}</span>
+                            {lesion.sizeMajor > 0 && <span>· {lesion.sizeMajor}mm</span>}
+                          </div>
+                        </div>
+                        <div className="text-[11px] px-2 py-1 rounded-md bg-slate-100 text-slate-600 group-hover:bg-violet-100 group-hover:text-violet-700 shrink-0">
+                          {linkCount} 条标注
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mb-4 px-4 py-5 rounded-xl bg-slate-50 border border-slate-200 border-dashed text-center">
+                  <div className="text-sm font-medium text-slate-600 mb-1">暂无病灶记录</div>
+                  <div className="text-[11px] text-slate-400">下方按钮可直接创建新病灶并关联</div>
+                </div>
+              )}
+
+              <button
+                onClick={() => createAndLinkNewLesion(linkingAnnotation.id)}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white text-sm font-semibold shadow-sm hover:shadow-md transition-all"
+              >
+                <PlusCircle className="w-4 h-4" />
+                新建病灶并关联
+                {selectedImage?.location && <span className="text-violet-100">（{selectedImage.location}）</span>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
